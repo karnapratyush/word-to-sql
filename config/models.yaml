@@ -1,0 +1,56 @@
+providers:
+  groq:
+    api_key_env: "GROQ_API_KEY"
+  google:
+    api_key_env: "GOOGLE_API_KEY"
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+
+task_routing:
+  sql_generation:
+    temperature: 0.0
+    max_tokens: 2000
+    timeout_seconds: 30
+    chain:
+      # OpenRouter models first — reliable, no rate limit issues
+      - { provider: openrouter, model: "qwen/qwen3-coder" }            # Free, 94% accuracy on 150 test cases, 1.3s avg
+      - { provider: openrouter, model: "google/gemini-2.5-flash" }      # Near-free via OpenRouter, 100% on easy cases
+      - { provider: groq, model: "llama-3.3-70b-versatile" }            # Free but rate limited — good single-query fallback
+      - { provider: openrouter, model: "deepseek/deepseek-r1" }         # Free, 100% accuracy but slow (34s) — complex query fallback
+      - { provider: openrouter, model: "anthropic/claude-sonnet-4" }    # Expensive last resort ($3/MTok)
+
+  classification:
+    temperature: 0.0
+    max_tokens: 500
+    timeout_seconds: 10
+    chain:
+      # Intent classification is simple — fast/cheap models first
+      - { provider: openrouter, model: "qwen/qwen3-coder" }            # Free, fast, good at structured output
+      - { provider: groq, model: "llama-3.1-8b-instant" }              # Free, ultra fast when not rate limited
+      - { provider: openrouter, model: "google/gemini-2.5-flash" }      # Fallback
+
+  vision:
+    temperature: 0.1
+    max_tokens: 4000
+    timeout_seconds: 60
+    chain:
+      # Vision-capable models for document extraction
+      - { provider: openrouter, model: "google/gemini-2.5-flash" }      # Strong multimodal via OpenRouter
+      - { provider: google, model: "gemini-2.5-flash" }                 # Direct Google (may rate limit)
+      - { provider: openrouter, model: "openai/gpt-4o-mini" }          # Cheap paid fallback
+      - { provider: groq, model: "llama-3.2-90b-vision-preview" }      # Free vision
+
+  answer_synthesis:
+    temperature: 0.3
+    max_tokens: 1000
+    timeout_seconds: 15
+    chain:
+      # Natural language answer generation from SQL results
+      - { provider: openrouter, model: "qwen/qwen3-coder" }            # Free, fast
+      - { provider: groq, model: "llama-3.3-70b-versatile" }           # Free fallback
+      - { provider: openrouter, model: "google/gemini-2.5-flash" }      # Fallback
+
+  chart_suggestion:
+    # Rule-based, no LLM needed — uses column types + query keywords
+    use_rules: true

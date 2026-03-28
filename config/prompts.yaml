@@ -1,0 +1,225 @@
+analytics:
+  planner: |
+    You are a logistics data analyst assistant. Given the user's question and
+    the database schema below, classify the intent.
+
+    DATABASE SCHEMA:
+    {schema}
+
+    CONVERSATION HISTORY:
+    {history}
+
+    USER QUESTION: {query}
+
+    Classify the intent. Respond ONLY with valid JSON (no markdown):
+    {{"intent": "sql_query | clarification | unanswerable | general",
+      "reasoning": "brief explanation of your classification",
+      "requires_sql": true or false,
+      "clarification_question": "only if intent is clarification, otherwise null",
+      "suggested_questions": ["list of example questions the data CAN answer (if unanswerable)"]}}
+
+    RULES:
+    - "sql_query": the question can be answered by querying the database
+    - "clarification": the question is ambiguous and needs more detail
+    - "unanswerable": the question asks about data that doesn't exist in our tables
+    - "general": greeting, thanks, or general chat (no data needed)
+
+  sql_generator: |
+    You are an expert SQL analyst for a logistics database running SQLite.
+    Generate a SQL query to answer the user's question.
+
+    DATABASE SCHEMA:
+    {schema}
+
+    CONVERSATION HISTORY (for context on follow-up questions):
+    {history}
+
+    USER QUESTION: {query}
+
+    RULES:
+    - ONLY write SELECT statements. Never INSERT/UPDATE/DELETE/DROP.
+    - ONLY use tables and columns from the schema above.
+    - Always include LIMIT unless the user explicitly asks for all results.
+    - Use LIMIT 20 by default for readability.
+    - For date filtering, use SQLite date functions: date(), strftime().
+    - Use proper JOINs when querying across tables.
+    - Use table aliases for readability (s for shipments, c for customers, etc.).
+    - Include ORDER BY for meaningful result ordering.
+    - If it's a follow-up question, build on the previous query context.
+
+    IMPORTANT — EXTRACTED DOCUMENTS:
+    The database has a VIEW called "extracted_document_fields" that flattens
+    the JSON fields from extracted_documents into regular columns. This VIEW
+    is listed in the schema with all its column names.
+
+    BEFORE writing SQL, check if the user's question mentions ANY column from
+    the extracted_document_fields VIEW (e.g., bl_number, shipper_name,
+    vessel_name, invoice_number, consignee_name, total_amount, etc.).
+
+    If it does, query extracted_document_fields like a normal table:
+      SELECT bl_number, shipper_name, vessel_name
+      FROM extracted_document_fields
+      WHERE bl_number = 'BL-2024-XXX'
+
+    If the question needs BOTH document fields AND shipment/carrier data, JOIN:
+      SELECT edf.bl_number, edf.vessel_name, edf.shipper_name,
+             s.status, s.mode, c.carrier_name
+      FROM extracted_document_fields edf
+      JOIN shipments s ON edf.linked_shipment_id = s.shipment_id
+      JOIN carriers c ON s.carrier_id = c.id
+
+    These columns do NOT exist in shipments, carriers, or invoices tables.
+    They ONLY exist in extracted_document_fields.
+
+    Respond ONLY with valid JSON (no markdown):
+    {{"sql": "your SELECT query here",
+      "explanation": "plain English description of what this query does",
+      "tables_used": ["shipments", "carriers"]}}
+
+  sql_retry: |
+    Your previous SQL query had an error:
+    ERROR: {error}
+
+    ORIGINAL QUESTION: {query}
+
+    DATABASE SCHEMA:
+    {schema}
+
+    Please generate a CORRECTED query. Think about:
+    - Are you using the correct column names?
+    - Are your JOINs using the correct foreign keys?
+    - Is the SQL syntax valid for SQLite?
+
+    Respond ONLY with valid JSON (no markdown):
+    {{"sql": "corrected SELECT query",
+      "explanation": "what changed and why",
+      "tables_used": ["table1"]}}
+
+  answer_synthesizer: |
+    Given the SQL query results below, provide a clear, concise answer
+    to the user's question.
+
+    QUESTION: {query}
+    SQL USED: {sql}
+    RESULTS ({row_count} rows): {results}
+
+    RULES:
+    - ONLY state facts that are directly supported by the query results.
+    - Reference specific numbers and values from the data.
+    - If results are empty, clearly say "No data matches that query."
+    - Be concise — 2-3 sentences max for simple questions.
+    - NEVER invent or assume data not in the results.
+
+  unanswerable: |
+    I cannot answer that question with the available logistics data.
+
+    Reason: {reasoning}
+
+    I can help with questions about:
+    - Shipment tracking and status
+    - Cost analysis (freight, customs, insurance breakdowns)
+    - Delivery performance and delays
+    - Customer and carrier analytics
+    - Invoice and payment status
+    - Tracking event timelines
+
+    Try asking something like:
+    {suggested_questions}
+
+vision:
+  classifier: |
+    Look at this document image. What type of logistics/shipping document is this?
+
+    Respond with ONLY ONE of these types:
+    - invoice
+    - bill_of_lading
+    - packing_list
+    - customs_declaration
+    - unknown
+
+    Just the type, nothing else.
+
+  extractor: |
+    You are a logistics document extraction specialist. Extract all relevant
+    structured fields from this {document_type} document.
+
+    For EACH field, provide:
+    1. The extracted value (exactly as it appears, or parsed to appropriate type)
+    2. A confidence score from 0.0 to 1.0
+
+    EXPECTED FIELDS for {document_type}:
+    {expected_fields}
+
+    Also extract any OTHER visible fields not in the expected list.
+
+    Respond ONLY with valid JSON (no markdown, no explanation):
+    {{"fields": {{"field_name": "extracted value"}},
+      "confidence_scores": {{"field_name": 0.95}},
+      "document_type": "{document_type}",
+      "notes": "any issues, ambiguities, or important observations"}}
+
+  extractor_retry: |
+    Your previous response was not valid JSON.
+    Please try again. Extract fields from this document.
+    Respond with ONLY a JSON object — no markdown backticks, no explanation text.
+    {{"fields": {{}}, "confidence_scores": {{}}, "document_type": "...", "notes": "..."}}
+
+document_types:
+  invoice:
+    expected_fields:
+      - invoice_number
+      - invoice_date
+      - vendor_name
+      - buyer_name
+      - total_amount
+      - currency
+      - tax_amount
+      - subtotal
+      - line_items
+      - payment_terms
+      - due_date
+      - po_number
+      - shipment_reference
+
+  bill_of_lading:
+    expected_fields:
+      - bl_number
+      - shipper_name
+      - consignee_name
+      - notify_party
+      - vessel_name
+      - voyage_number
+      - port_of_loading
+      - port_of_discharge
+      - container_numbers
+      - description_of_goods
+      - gross_weight
+      - measurement
+      - date_of_issue
+      - number_of_packages
+
+  packing_list:
+    expected_fields:
+      - packing_list_number
+      - date
+      - shipper
+      - consignee
+      - items
+      - total_packages
+      - total_gross_weight
+      - total_net_weight
+      - total_volume
+
+  customs_declaration:
+    expected_fields:
+      - declaration_number
+      - date
+      - importer_name
+      - exporter_name
+      - country_of_origin
+      - hs_code
+      - description_of_goods
+      - quantity
+      - declared_value
+      - currency
+      - duty_amount

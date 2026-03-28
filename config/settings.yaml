@@ -1,0 +1,52 @@
+guardrails:
+  max_input_length: 1000
+  max_sql_result_rows: 100
+  sql_query_timeout_seconds: 30
+  sql_blocked_keywords:
+    - "DROP"
+    - "DELETE"
+    - "INSERT"
+    - "UPDATE"
+    - "ALTER"
+    - "CREATE"
+    - "TRUNCATE"
+    - "EXEC"
+    - "GRANT"
+    - "REVOKE"
+  injection_patterns:
+    - "ignore\\s+(previous|above)\\s+instructions"
+    - "disregard\\s+(all|your)"
+    - "you\\s+are\\s+now"
+    - "new\\s+instructions"
+    - "system\\s+prompt"
+    - "forget\\s+(your|all)"
+
+extraction:
+  confidence_threshold: 0.7
+  low_confidence_threshold: 0.4
+  max_retries: 2
+  max_file_size_mb: 10
+  supported_file_types:
+    - ".pdf"
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+
+analytics:
+  max_retries: 2
+  max_conversation_history: 10
+  default_row_limit: 100
+  full_scan_row_threshold: 1000    # Block full table scans on tables with more rows than this. Set low (1K) for POC demo. Production: 1000000
+
+database:
+  path: "db/logistics.db"
+  wal_mode: true
+
+langfuse:
+  enabled: true
+  public_key_env: "LANGFUSE_PUBLIC_KEY"
+  secret_key_env: "LANGFUSE_SECRET_KEY"
+  host: "https://cloud.langfuse.com"
+
+app:
+  title: "GoComet AI Logistics Assistant"
