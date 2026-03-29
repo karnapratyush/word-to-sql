@@ -29,19 +29,34 @@ from src.common.exceptions import UnsupportedFileError
 
 class TestExtractFromDocument:
     def test_returns_extraction_result(self):
-        # Use a minimal valid PDF (1x1 white pixel PNG as fallback)
-        fake_png = _make_minimal_png()
-        result = extract_from_document(fake_png, "test_invoice.png", document_type_hint="invoice")
+        """Extract from a real sample document (not a blank pixel)."""
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "db", "samples", "invoice_clear_001.pdf")
+        if not os.path.exists(sample_path):
+            pytest.skip("Sample documents not generated — run: python db/sample_documents.py")
+        with open(sample_path, "rb") as f:
+            file_bytes = f.read()
+        result = extract_from_document(file_bytes, "invoice_clear_001.pdf", document_type_hint="invoice")
         assert isinstance(result, ExtractionResult)
 
     def test_has_fields(self):
-        fake_png = _make_minimal_png()
-        result = extract_from_document(fake_png, "invoice.png", document_type_hint="invoice")
+        """Extraction should return a non-empty fields dict."""
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "db", "samples", "invoice_clear_001.pdf")
+        if not os.path.exists(sample_path):
+            pytest.skip("Sample documents not generated")
+        with open(sample_path, "rb") as f:
+            file_bytes = f.read()
+        result = extract_from_document(file_bytes, "invoice_clear_001.pdf", document_type_hint="invoice")
         assert isinstance(result.fields, dict)
+        assert len(result.fields) > 0
 
     def test_has_confidence_scores(self):
-        fake_png = _make_minimal_png()
-        result = extract_from_document(fake_png, "invoice.png", document_type_hint="invoice")
+        """Each extracted field should have a confidence score between 0 and 1."""
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "db", "samples", "invoice_clear_001.pdf")
+        if not os.path.exists(sample_path):
+            pytest.skip("Sample documents not generated")
+        with open(sample_path, "rb") as f:
+            file_bytes = f.read()
+        result = extract_from_document(file_bytes, "invoice_clear_001.pdf", document_type_hint="invoice")
         for field_name, field in result.fields.items():
             assert 0.0 <= field.confidence <= 1.0
 
@@ -50,8 +65,13 @@ class TestExtractFromDocument:
             extract_from_document(b"not a file", "test.xyz")
 
     def test_includes_model_used(self):
-        fake_png = _make_minimal_png()
-        result = extract_from_document(fake_png, "invoice.png", document_type_hint="invoice")
+        """Model name should be set on successful extraction."""
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "db", "samples", "invoice_clear_001.pdf")
+        if not os.path.exists(sample_path):
+            pytest.skip("Sample documents not generated")
+        with open(sample_path, "rb") as f:
+            file_bytes = f.read()
+        result = extract_from_document(file_bytes, "invoice_clear_001.pdf", document_type_hint="invoice")
         assert result.model_used != ""
 
 
@@ -87,18 +107,20 @@ class TestValidateExtraction:
         validated = validate_extraction(result, settings)
         assert all(not f.needs_review for f in validated.fields.values())
 
-    def test_recalculates_overall_confidence(self):
+    def test_preserves_original_confidence(self):
+        """Validator should preserve the LLM's original overall confidence,
+        not recalculate it. Consistency issues go to notes instead."""
         result = ExtractionResult(
             document_type="invoice",
             fields={
                 "a": FieldExtraction(value="x", confidence=0.8),
                 "b": FieldExtraction(value="y", confidence=0.4),
             },
-            overall_confidence=0.99,  # wrong, should be recalculated
+            overall_confidence=0.99,
         )
         settings = {"extraction": {"confidence_threshold": 0.7, "low_confidence_threshold": 0.4}}
         validated = validate_extraction(result, settings)
-        assert validated.overall_confidence < 0.99  # should be average of 0.8 and 0.4 = 0.6
+        assert validated.overall_confidence == 0.99  # preserved, not recalculated
 
     def test_empty_fields(self):
         result = ExtractionResult(
@@ -209,20 +231,30 @@ class TestGetExtractedDocuments:
 
 class TestProcessDocument:
     def test_returns_extraction_result(self):
-        fake_png = _make_minimal_png()
+        """Process a real sample document through the full pipeline."""
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "db", "samples", "invoice_clear_001.pdf")
+        if not os.path.exists(sample_path):
+            pytest.skip("Sample documents not generated")
+        with open(sample_path, "rb") as f:
+            file_bytes = f.read()
         req = ExtractionRequest(
-            file_bytes=fake_png,
-            file_name="invoice.png",
+            file_bytes=file_bytes,
+            file_name="invoice_clear_001.pdf",
             document_type_hint="invoice",
         )
         result = process_document(req)
         assert isinstance(result, ExtractionResult)
 
     def test_fields_have_review_flags(self):
-        fake_png = _make_minimal_png()
+        """After validation, each field should have a boolean needs_review flag."""
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "db", "samples", "invoice_clear_001.pdf")
+        if not os.path.exists(sample_path):
+            pytest.skip("Sample documents not generated")
+        with open(sample_path, "rb") as f:
+            file_bytes = f.read()
         req = ExtractionRequest(
-            file_bytes=fake_png,
-            file_name="invoice.png",
+            file_bytes=file_bytes,
+            file_name="invoice_clear_001.pdf",
             document_type_hint="invoice",
         )
         result = process_document(req)

@@ -10,22 +10,20 @@ DML/DDL statements (INSERT, UPDATE, DELETE, DROP, etc.) are blocked
 with a regex check before execution.
 """
 
-import re
 from typing import Optional
 
 from src.repositories.base import BaseRepository, SCHEMA_PATH
+from src.common.config_loader import load_settings
+from src.common.utils import DML_PATTERN
+
+# Use shared DML pattern from utils to avoid duplication
+_DML_PATTERN = DML_PATTERN
 
 
-# Regex pattern to detect non-SELECT statements (engine-agnostic).
-# Matches DML/DDL keywords at the start of the query or after a semicolon.
-_DML_PATTERN = re.compile(
-    r"^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|EXEC|GRANT|REVOKE)\b",
-    re.IGNORECASE,
-)
-
-# Default row limit appended to queries missing a LIMIT clause,
-# preventing unbounded result sets from overwhelming the LLM or UI.
-DEFAULT_LIMIT = 100
+def _get_default_limit() -> int:
+    """Load default row limit from config instead of hardcoding."""
+    settings = load_settings()
+    return settings.get("analytics", {}).get("default_row_limit", 100)
 
 
 class AnalyticsRepository(BaseRepository):
@@ -72,11 +70,11 @@ class AnalyticsRepository(BaseRepository):
                 f"Only SELECT queries are allowed. Got: {stripped[:50]}..."
             )
 
-        # Auto-add LIMIT to prevent unbounded result sets
+        # Auto-add LIMIT to prevent unbounded result sets (limit from config)
         if "LIMIT" not in stripped.upper():
             # Strip trailing semicolons before appending LIMIT
             cleaned = stripped.rstrip(";").rstrip()
-            sql = f"{cleaned} LIMIT {DEFAULT_LIMIT}"
+            sql = f"{cleaned} LIMIT {_get_default_limit()}"
 
         return self._execute(sql, params)
 

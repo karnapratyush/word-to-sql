@@ -31,6 +31,7 @@ Error handling:
 """
 
 import logging
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -204,7 +205,13 @@ def reject_document(
     """
     logger.info("DELETE /reject/%s", file_name)
 
-    result = service.reject_document(file_name)
+    # Sanitize file_name to prevent path traversal
+    safe_name = re.sub(r'[/\\]', '', file_name)
+    safe_name = safe_name.replace('..', '')
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid file name")
+
+    result = service.reject_document(safe_name)
 
     return DocumentRejectResponse(
         status=result["status"],

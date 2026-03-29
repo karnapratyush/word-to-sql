@@ -91,6 +91,52 @@ def suggest_chart(query: str, columns: list[str], row_count: int) -> Optional[st
     return "bar"
 
 
+# ── Chart Builder Functions ──────────────────────────────────────────
+# Each builder creates a Plotly figure for a specific chart type.
+# Used by the _CHART_BUILDERS registry dict below.
+
+def _build_bar(x_values, y_values, x_col, y_col, title):
+    """Build a bar chart figure."""
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=[str(v) for v in x_values],  # Convert to strings for categorical axis
+        y=y_values,
+        name=y_col,
+    ))
+    fig.update_layout(title=title, xaxis_title=x_col, yaxis_title=y_col)
+    return fig
+
+
+def _build_line(x_values, y_values, x_col, y_col, title):
+    """Build a line chart figure."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=[str(v) for v in x_values],
+        y=y_values,
+        mode="lines+markers",  # Show both line and data points
+        name=y_col,
+    ))
+    fig.update_layout(title=title, xaxis_title=x_col, yaxis_title=y_col)
+    return fig
+
+
+def _build_pie(x_values, y_values, x_col, y_col, title):
+    """Build a pie chart figure."""
+    fig = go.Figure()
+    fig.add_trace(go.Pie(
+        labels=[str(v) for v in x_values],
+        values=y_values,
+        name=y_col,
+    ))
+    fig.update_layout(title=title)
+    return fig
+
+
+# Registry dict mapping chart type strings to builder functions.
+# Replaces the if/elif chain in create_chart for cleaner dispatch.
+_CHART_BUILDERS = {"bar": _build_bar, "line": _build_line, "pie": _build_pie}
+
+
 # ── Chart Creation ───────────────────────────────────────────────────
 
 def create_chart(
@@ -117,9 +163,6 @@ def create_chart(
     if not data or not columns:
         return None
 
-    if chart_type not in ("bar", "line", "pie"):
-        return None
-
     try:
         # Use first column as labels (x-axis) and second as values (y-axis)
         x_col = columns[0]
@@ -134,40 +177,11 @@ def create_chart(
         # Truncate long queries for the chart title
         title = query[:80] + "..." if len(query) > 80 else query
 
-        fig = go.Figure()
-
-        if chart_type == "bar":
-            fig.add_trace(go.Bar(
-                x=[str(v) for v in x_values],  # Convert to strings for categorical axis
-                y=y_values,
-                name=y_col,
-            ))
-            fig.update_layout(
-                title=title,
-                xaxis_title=x_col,
-                yaxis_title=y_col,
-            )
-
-        elif chart_type == "line":
-            fig.add_trace(go.Scatter(
-                x=[str(v) for v in x_values],
-                y=y_values,
-                mode="lines+markers",  # Show both line and data points
-                name=y_col,
-            ))
-            fig.update_layout(
-                title=title,
-                xaxis_title=x_col,
-                yaxis_title=y_col,
-            )
-
-        elif chart_type == "pie":
-            fig.add_trace(go.Pie(
-                labels=[str(v) for v in x_values],
-                values=y_values,
-                name=y_col,
-            ))
-            fig.update_layout(title=title)
+        # Use registry to dispatch chart building
+        builder = _CHART_BUILDERS.get(chart_type)
+        if builder is None:
+            return None
+        fig = builder(x_values, y_values, x_col, y_col, title)
 
         # Serialize to JSON-compatible dict for API transport
         return fig.to_plotly_json()

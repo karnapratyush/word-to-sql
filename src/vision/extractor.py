@@ -35,7 +35,8 @@ from langchain_core.messages import HumanMessage
 from src.common.config_loader import load_prompts, load_settings, load_model_config
 from src.common.exceptions import ExtractionError, UnsupportedFileError
 from src.common.schemas import ExtractionResult, FieldExtraction
-from src.models.llm_factory import _create_model_instance
+from src.common.utils import strip_markdown_fences
+from src.models.llm_factory import create_model_instance
 from src.tracing import get_callbacks
 
 # ── Logger ──────────────────────────────────────────────────────────────
@@ -225,7 +226,7 @@ def _invoke_vision_model(messages: list[HumanMessage], trace_name: str = "vision
         model_name = f"{provider}/{model}"
         try:
             # Create the model instance
-            instance = _create_model_instance(provider, model, temperature, max_tokens, timeout)
+            instance = create_model_instance(provider, model, temperature, max_tokens, timeout)
 
             # Invoke with multimodal messages directly (not string-based)
             response = instance.invoke(messages, config=cb_config)
@@ -487,15 +488,8 @@ def _parse_extraction_response(response_text: str) -> dict:
     Raises:
         json.JSONDecodeError: If the response cannot be parsed as JSON.
     """
-    text = response_text.strip()
-
-    # Strip markdown code fences if present (```json ... ``` or ``` ... ```)
-    if text.startswith("```"):
-        # Remove opening fence (with optional language tag)
-        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
-        # Remove closing fence
-        text = re.sub(r"\n?```\s*$", "", text)
-        text = text.strip()
+    # Use shared utility to strip markdown code fences (```json ... ``` etc.)
+    text = strip_markdown_fences(response_text)
 
     # Try to find a JSON object in the text if direct parsing fails
     try:
@@ -661,11 +655,16 @@ def extract_from_document(
             image_bytes_list = [file_bytes]
 
         # Step 4: Classify document type AND check language.
-        # Always run the classifier — it checks both language and type in one call.
-        # Non-English documents are rejected here before the expensive extraction.
-        logger.info("Classifying document language and type using vision LLM...")
-        document_type = _classify_document(image_bytes_list[0])
-        logger.info("Document classified as: %s", document_type)
+        # If a valid hint is provided (e.g., from tests or API callers who already
+        # know the type), skip the classifier to avoid an unnecessary LLM call.
+        # The classifier checks both language and type in one call.
+        if document_type_hint and document_type_hint.lower() in KNOWN_DOCUMENT_TYPES - {"unknown"}:
+            document_type = document_type_hint.lower()
+            logger.info("Using provided document type hint: %s (skipping classifier)", document_type)
+        else:
+            logger.info("Classifying document language and type using vision LLM...")
+            document_type = _classify_document(image_bytes_list[0])
+            logger.info("Document classified as: %s", document_type)
 
         # Reject unknown document types — we don't know what fields to extract.
         # This catches non-logistics documents (selfies, screenshots, random files).

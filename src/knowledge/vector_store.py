@@ -23,6 +23,7 @@ Usage:
 """
 
 import os
+import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -369,17 +370,24 @@ class KnowledgeStore:
 # so we maintain a single instance for the lifetime of the process.
 
 _store_instance: KnowledgeStore | None = None
+# Thread lock for double-checked locking on singleton creation
+_store_lock = threading.Lock()
 
 
 def get_knowledge_store() -> KnowledgeStore:
     """Return the shared KnowledgeStore singleton (created on first call).
+
+    Uses double-checked locking for thread safety — multiple threads
+    calling this concurrently won't create duplicate instances.
 
     Returns:
         The global KnowledgeStore instance.
     """
     global _store_instance
     if _store_instance is None:
-        _store_instance = KnowledgeStore()
+        with _store_lock:
+            if _store_instance is None:
+                _store_instance = KnowledgeStore()
     return _store_instance
 
 

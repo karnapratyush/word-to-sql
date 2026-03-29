@@ -8,6 +8,6 @@ two main functions so callers can use the shorter import path:
     from src.models import get_model, get_model_with_fallback
 """
 
-from src.models.llm_factory import get_model, get_model_with_fallback
+from src.models.llm_factory import get_model, get_model_with_fallback, create_model_instance
 
-__all__ = ["get_model", "get_model_with_fallback"]
+__all__ = ["get_model", "get_model_with_fallback", "create_model_instance"]

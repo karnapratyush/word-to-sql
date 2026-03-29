@@ -13,23 +13,24 @@ Three types of validation:
 import json
 import re
 from src.common.schemas import GuardrailResult
+from src.common.config_loader import load_settings
+from src.common.utils import DML_PATTERN, strip_markdown_fences  # noqa: F401 — strip_markdown_fences available for callers
 
 
 # ── SQL Validation ───────────────────────────────────────────────────
 
-# DML/DDL patterns that must be blocked in LLM-generated SQL.
-# These are data-modifying operations that should never run from user queries.
-_DANGEROUS_SQL = re.compile(
-    r"^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|EXEC|GRANT|REVOKE)\b",
-    re.IGNORECASE,
-)
+# Use shared DML pattern from utils to avoid duplication
+_DANGEROUS_SQL = DML_PATTERN
 
 # Detects multiple SQL statements separated by semicolons.
 # Multi-statement queries are a common SQL injection vector.
 _MULTI_STATEMENT = re.compile(r";\s*\w", re.IGNORECASE)
 
-# Default row limit appended when the LLM forgets to include LIMIT
-DEFAULT_LIMIT = 100
+
+def _get_default_limit() -> int:
+    """Load default row limit from config instead of hardcoding."""
+    settings = load_settings()
+    return settings.get("analytics", {}).get("default_row_limit", 100)
 
 
 def validate_sql(sql: str) -> GuardrailResult:
@@ -74,17 +75,26 @@ def validate_sql(sql: str) -> GuardrailResult:
         )
 
     # Block multi-statement queries (SQL injection defense)
+    # Check for any semicolon followed by non-whitespace-only content.
+    # Also check for any semicolon in the middle of the statement (not just trailing).
+    # This catches bypass patterns like ";\t\nDROP" that the regex misses.
     if _MULTI_STATEMENT.search(stripped):
         return GuardrailResult(
             passed=False,
             reason="Multi-statement queries are not allowed.",
             blocked_patterns=["multi-statement"],
         )
+    stripped_no_trailing = stripped.rstrip(';').rstrip()
+    if ';' in stripped_no_trailing:
+        return GuardrailResult(
+            passed=False,
+            reason="Multiple SQL statements detected",
+        )
 
-    # Auto-add LIMIT if the LLM forgot to include one
+    # Auto-add LIMIT if the LLM forgot to include one (limit from config)
     sanitized = stripped
     if "LIMIT" not in sanitized.upper():
-        sanitized = sanitized.rstrip(";").rstrip() + f" LIMIT {DEFAULT_LIMIT}"
+        sanitized = sanitized.rstrip(";").rstrip() + f" LIMIT {_get_default_limit()}"
 
     return GuardrailResult(
         passed=True,

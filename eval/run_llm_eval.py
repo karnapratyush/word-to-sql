@@ -252,9 +252,9 @@ def create_model_instance(model_key: str) -> Any:
     provider = parts[0]
     model_name = parts[1] if len(parts) > 1 else ""
 
-    # Use the factory's internal creation function for consistency
-    from src.models.llm_factory import _create_model_instance
-    return _create_model_instance(provider, model_name, temperature, max_tokens, timeout)
+    # Use the factory's public creation function for consistency
+    from src.models.llm_factory import create_model_instance
+    return create_model_instance(provider, model_name, temperature, max_tokens, timeout)
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -11,10 +11,18 @@ Usage:
 """
 
 import argparse
+import logging
 
 import uvicorn
 
 from src.api.main import create_app
+
+# Configure root logger so all module loggers output to terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 # Create the app at module level so uvicorn can import it as "run_api:app"
 app = create_app()

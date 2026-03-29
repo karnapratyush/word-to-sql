@@ -15,10 +15,14 @@ if the LLM is unavailable or returns unparseable output.
 """
 
 import json
+import logging
 
 from src.common.schemas import PlannerResult, Intent
 from src.common.config_loader import load_prompts
+from src.common.utils import format_history as _shared_format_history
 from src.models import get_model_with_fallback
+
+logger = logging.getLogger(__name__)
 
 
 def classify_intent(
@@ -45,8 +49,8 @@ def classify_intent(
     prompts = load_prompts()
     prompt_template = prompts["analytics"]["planner"]
 
-    # Format conversation history into a string for the prompt
-    history_str = _format_history(conversation_history)
+    # Format conversation history into a string for the prompt (using shared util)
+    history_str = _shared_format_history(conversation_history, max_turns=10, max_content_length=500)
 
     # Fill in the prompt template with schema, history, and query
     prompt = prompt_template.format(
@@ -65,9 +69,10 @@ def classify_intent(
 
         return _parse_planner_response(response)
 
-    except Exception:
+    except Exception as e:
         # LLM failed entirely — fall back to rule-based classification
         # so the pipeline continues even without LLM access
+        logger.warning("LLM classification failed, using rule-based fallback: %s", e)
         return _rule_based_classify(query)
 
 
@@ -183,27 +188,4 @@ def _rule_based_classify(query: str) -> PlannerResult:
     )
 
 
-# ── History Formatting ───────────────────────────────────────────────
-
-def _format_history(history: list[dict]) -> str:
-    """Format conversation history for inclusion in the LLM prompt.
-
-    Limits to the last 10 turns and truncates long messages to 200 chars
-    to keep the prompt within token limits.
-
-    Args:
-        history: List of message dicts with "role" and "content" keys.
-
-    Returns:
-        Formatted string with "ROLE: content" lines, or a placeholder
-        string if there is no history.
-    """
-    if not history:
-        return "(no previous conversation)"
-
-    lines = []
-    for msg in history[-10:]:  # Last 10 turns max to control prompt size
-        role = msg.get("role", "user").upper()
-        content = msg.get("content", "")[:500]  # Truncate long messages
-        lines.append(f"{role}: {content}")
-    return "\n".join(lines)
+    # NOTE: _format_history was removed — now using shared format_history from src.common.utils

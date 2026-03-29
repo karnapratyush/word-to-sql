@@ -40,7 +40,36 @@ load_dotenv()
 
 # ── Model Instance Creation ──────────────────────────────────────────
 
-def _create_model_instance(provider: str, model: str, temperature: float, max_tokens: int, timeout: int) -> Any:
+def _create_groq(model, temperature, max_tokens, timeout):
+    """Create a Groq LLM instance (Llama models via Groq's fast inference API)."""
+    from langchain_groq import ChatGroq
+    return ChatGroq(model=model, temperature=temperature, max_tokens=max_tokens, timeout=timeout, api_key=os.environ.get("GROQ_API_KEY", ""))
+
+
+def _create_google(model, temperature, max_tokens, timeout):
+    """Create a Google Generative AI instance (Gemini models)."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    return ChatGoogleGenerativeAI(model=model, temperature=temperature, max_output_tokens=max_tokens, timeout=timeout, google_api_key=os.environ.get("GOOGLE_API_KEY", ""))
+
+
+def _create_openrouter(model, temperature, max_tokens, timeout):
+    """Create an OpenRouter instance (OpenAI-compatible API with custom base URL)."""
+    from langchain_openai import ChatOpenAI
+    config = load_model_config()
+    base_url = config.get("providers", {}).get("openrouter", {}).get("base_url", "https://openrouter.ai/api/v1")
+    return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, timeout=timeout, openai_api_key=os.environ.get("OPENROUTER_API_KEY", ""), openai_api_base=base_url)
+
+
+# Registry dict mapping provider names to their factory functions.
+# Replaces the if/elif chain for cleaner dispatch and easier extension.
+_PROVIDER_REGISTRY = {
+    "groq": _create_groq,
+    "google": _create_google,
+    "openrouter": _create_openrouter,
+}
+
+
+def create_model_instance(provider: str, model: str, temperature: float, max_tokens: int, timeout: int) -> Any:
     """Create a LangChain chat model instance for the given provider.
 
     Uses lazy imports for provider SDKs so that only the needed SDK
@@ -60,39 +89,14 @@ def _create_model_instance(provider: str, model: str, temperature: float, max_to
     Raises:
         ValueError: If the provider string is not recognized.
     """
-    if provider == "groq":
-        from langchain_groq import ChatGroq
-        return ChatGroq(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            api_key=os.environ.get("GROQ_API_KEY", ""),
-        )
-    elif provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        return ChatGoogleGenerativeAI(
-            model=model,
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-            timeout=timeout,
-            google_api_key=os.environ.get("GOOGLE_API_KEY", ""),
-        )
-    elif provider == "openrouter":
-        from langchain_openai import ChatOpenAI
-        # OpenRouter uses an OpenAI-compatible API with a custom base URL
-        config = load_model_config()
-        base_url = config.get("providers", {}).get("openrouter", {}).get("base_url", "https://openrouter.ai/api/v1")
-        return ChatOpenAI(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            openai_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-            openai_api_base=base_url,
-        )
-    else:
-        raise ValueError(f"Unknown provider: {provider}")
+    factory = _PROVIDER_REGISTRY.get(provider)
+    if factory is None:
+        raise ValueError(f"Unknown provider: {provider}. Available: {list(_PROVIDER_REGISTRY.keys())}")
+    return factory(model, temperature, max_tokens, timeout)
+
+
+# Backward-compatible alias (was private, now public)
+_create_model_instance = create_model_instance
 
 
 # ── Public Factory Functions ─────────────────────────────────────────
@@ -130,7 +134,7 @@ def get_model(task: str) -> tuple[Any, str]:
         model = entry["model"]
         model_name = f"{provider}/{model}"
         try:
-            instance = _create_model_instance(provider, model, temperature, max_tokens, timeout)
+            instance = create_model_instance(provider, model, temperature, max_tokens, timeout)
             return instance, model_name
         except Exception as e:
             errors.append(f"{model_name}: {e}")
@@ -191,7 +195,7 @@ def get_model_with_fallback(task: str, messages: list, **kwargs) -> tuple[Any, s
         model = entry["model"]
         model_name = f"{provider}/{model}"
         try:
-            instance = _create_model_instance(provider, model, temperature, max_tokens, timeout)
+            instance = create_model_instance(provider, model, temperature, max_tokens, timeout)
             # Actually invoke the model — this is where API calls happen
             response = instance.invoke(lc_messages, config=cb_config)
             # Extract string content from the LangChain response object

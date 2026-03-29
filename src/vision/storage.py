@@ -21,6 +21,7 @@ The _known_fields set:
 
 import json
 import logging
+import threading
 import uuid
 from typing import Optional
 
@@ -43,6 +44,8 @@ logger = logging.getLogger(__name__)
 #             and includes them in the schema description sent to the LLM
 
 _known_fields: set[str] = set()
+# Thread lock for atomic updates to _known_fields
+_fields_lock = threading.Lock()
 
 
 def _load_known_fields(repo: DocumentRepository) -> set[str]:
@@ -103,7 +106,8 @@ def _update_known_fields(new_fields: dict) -> None:
     """Add any new field names from an uploaded document to the set.
 
     Called after each document insert. If the document has field names
-    we haven't seen before, they're added to the set.
+    we haven't seen before, they're added to the set. Uses a lock
+    and atomic replacement for thread safety.
 
     Args:
         new_fields: Field name → value dict from the newly stored document.
@@ -112,9 +116,9 @@ def _update_known_fields(new_fields: dict) -> None:
     incoming = set(new_fields.keys())
     new_names = incoming - _known_fields
     if new_names:
-        _known_fields.update(new_names)
-        logger.info("New fields discovered: %s (total now: %d)",
-                    new_names, len(_known_fields))
+        with _fields_lock:
+            _known_fields = _known_fields | new_names  # atomic replacement
+        logger.info("New fields discovered: %s", new_names)
 
 
 # ── Auto-Linking ─────────────────────────────────────────────────────
@@ -151,8 +155,9 @@ def _try_auto_link(extracted_fields: dict, repo: DocumentRepository) -> str | No
                 logger.info("Auto-linked via %s → shipments.shipment_id: %s",
                            field_name, rows[0]["shipment_id"])
                 return rows[0]["shipment_id"]
-        except Exception:
-            pass
+        except Exception as e:
+            # Log at debug level — auto-link failures are non-critical
+            logger.debug("Auto-link lookup failed for %s: %s", field_name, e)
 
     # Priority 2: PO number → shipments.po_number
     po_value = _get_clean_value(extracted_fields, "po_number")
@@ -166,8 +171,9 @@ def _try_auto_link(extracted_fields: dict, repo: DocumentRepository) -> str | No
                 logger.info("Auto-linked via po_number → shipments.po_number: %s",
                            rows[0]["shipment_id"])
                 return rows[0]["shipment_id"]
-        except Exception:
-            pass
+        except Exception as e:
+            # Log at debug level — auto-link failures are non-critical
+            logger.debug("Auto-link lookup failed for po_number: %s", e)
 
     # Priority 3: Invoice number → invoices.invoice_number → invoices.shipment_id
     inv_value = _get_clean_value(extracted_fields, "invoice_number")
@@ -183,8 +189,9 @@ def _try_auto_link(extracted_fields: dict, repo: DocumentRepository) -> str | No
                 logger.info("Auto-linked via invoice_number → invoices → shipments: %s",
                            rows[0]["shipment_id"])
                 return rows[0]["shipment_id"]
-        except Exception:
-            pass
+        except Exception as e:
+            # Log at debug level — auto-link failures are non-critical
+            logger.debug("Auto-link lookup failed for invoice_number: %s", e)
 
     return None
 

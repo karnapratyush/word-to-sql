@@ -22,6 +22,7 @@ from typing import Optional
 
 from src.common.schemas import SQLGenerationResult, PlannerResult
 from src.common.config_loader import load_prompts
+from src.common.utils import format_history as _shared_format_history
 from src.models import get_model_with_fallback
 from src.knowledge.vector_store import get_knowledge_store
 from src.knowledge.sql_pitfall_checker import check_sql_pitfalls, format_pitfall_warnings
@@ -81,7 +82,7 @@ def generate_sql(
     else:
         # Normal first-attempt prompt with schema and few-shot examples
         template = prompts["analytics"]["sql_generator"]
-        history_str = _format_history(conversation_history)
+        history_str = _shared_format_history(conversation_history, max_turns=10, max_content_length=200)
 
         # Append few-shot examples after the schema for additional context
         schema_with_examples = focused_schema
@@ -182,26 +183,4 @@ def _parse_sql_response(raw: str) -> SQLGenerationResult:
     )
 
 
-# ── History Formatting ───────────────────────────────────────────────
-
-def _format_history(history: list[dict]) -> str:
-    """Format conversation history for inclusion in the LLM prompt.
-
-    Limits to the last 10 turns and truncates long messages to keep
-    the prompt within token limits.
-
-    Args:
-        history: List of message dicts with "role" and "content" keys.
-
-    Returns:
-        Formatted string with "ROLE: content" lines.
-    """
-    if not history:
-        return "(no previous conversation)"
-
-    lines = []
-    for msg in history[-10:]:  # Last 10 turns max
-        role = msg.get("role", "user").upper()
-        content = msg.get("content", "")[:200]  # Truncate long messages
-        lines.append(f"{role}: {content}")
-    return "\n".join(lines)
+    # NOTE: _format_history was removed — now using shared format_history from src.common.utils

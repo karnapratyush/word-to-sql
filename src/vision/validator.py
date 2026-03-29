@@ -267,7 +267,15 @@ def _check_completeness(
     return missing
 
 
-    return round(total / len(fields), 4)
+# ── Consistency Checker Registry ───────────────────────────────────────
+# Strategy dict mapping document types to their consistency check functions.
+# Replaces if/elif chain in validate_extraction for cleaner dispatch.
+_CONSISTENCY_CHECKERS = {
+    "invoice": _check_invoice_consistency,
+    "bill_of_lading": _check_bol_consistency,
+    "packing_list": _check_packing_list_consistency,
+    "customs_declaration": _check_customs_consistency,
+}
 
 
 # ── Public API ──────────────────────────────────────────────────────────
@@ -331,16 +339,11 @@ def validate_extraction(
         )
         logger.warning("Very low confidence fields: %s", very_low_fields)
 
-    # Step 2: Document-type-specific consistency checks
+    # Step 2: Document-type-specific consistency checks (via registry)
     consistency_warnings = []
-    if result.document_type == "invoice":
-        consistency_warnings = _check_invoice_consistency(updated_fields)
-    elif result.document_type == "bill_of_lading":
-        consistency_warnings = _check_bol_consistency(updated_fields)
-    elif result.document_type == "packing_list":
-        consistency_warnings = _check_packing_list_consistency(updated_fields)
-    elif result.document_type == "customs_declaration":
-        consistency_warnings = _check_customs_consistency(updated_fields)
+    checker = _CONSISTENCY_CHECKERS.get(result.document_type)
+    if checker:
+        consistency_warnings = checker(updated_fields)
 
     if consistency_warnings:
         notes_parts.extend(consistency_warnings)
