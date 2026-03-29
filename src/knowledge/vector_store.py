@@ -176,11 +176,24 @@ class KnowledgeStore:
         schema_text = self._build_schema_text(schema_results)
         relevant_tables = self._extract_table_names(schema_results)
 
-        # Step 4: Build few-shot text for the prompt
+        # Step 4: Always append extracted_documents context with live field names.
+        # This is always included regardless of similarity score because:
+        # - Users can ask about extracted docs in any phrasing
+        # - The field list changes at runtime (new uploads add new fields)
+        # - The in-memory set (_known_fields) is the source of truth for what
+        #   columns actually exist, not the hardcoded expected_fields in prompts.yaml
+        extracted_docs_context = self._build_extracted_docs_context()
+        if extracted_docs_context:
+            schema_text = schema_text + "\n\n" + extracted_docs_context
+            if "extracted_documents" not in relevant_tables:
+                relevant_tables.append("extracted_documents")
+                relevant_tables.sort()
+
+        # Step 5: Build few-shot text for the prompt
         few_shot_text = self._build_few_shot_text(few_shot_results)
         few_shot_count = len(few_shot_results["ids"][0]) if few_shot_results["ids"] else 0
 
-        # Step 5: Get all table names for reference (helps LLM know what else exists)
+        # Step 6: Get all table names for reference
         all_tables = [
             doc["metadata"]["table"]
             for doc in TABLE_DESCRIPTIONS
@@ -193,6 +206,51 @@ class KnowledgeStore:
             few_shot_count=few_shot_count,
             all_table_names=all_tables,
         )
+
+    def _build_extracted_docs_context(self) -> str:
+        """Build extracted_documents context using the live known-fields set.
+
+        This is ALWAYS included in the schema context (not dependent on
+        similarity search). The known-fields set is the source of truth
+        because it reflects the actual fields in the database, which change
+        as users upload new document types.
+
+        Returns:
+            Multi-line string describing extracted_documents and its JSON fields,
+            or empty string if no documents have been uploaded yet.
+        """
+        try:
+            from src.vision.storage import get_known_fields
+            fields = get_known_fields()
+        except Exception:
+            fields = set()
+
+        if not fields:
+            return ""
+
+        lines = [
+            "ALWAYS AVAILABLE — EXTRACTED DOCUMENTS:",
+            "TABLE: extracted_documents",
+            "  Regular columns: document_id, document_type, file_name, overall_confidence,",
+            "    review_status, linked_shipment_id, upload_timestamp, extraction_model",
+            "  ",
+            "  JSON columns (query with json_extract(extracted_fields, '$.field_name')):",
+            "  The following fields have been extracted from uploaded documents.",
+            "  This list is the SOURCE OF TRUTH — it reflects actual data in the database",
+            "  and updates automatically when new document types are uploaded.",
+            "  ",
+        ]
+
+        for field_name in sorted(fields):
+            lines.append(f"    - {field_name}")
+
+        lines.extend([
+            "  ",
+            "  JOIN to shipments: extracted_documents.linked_shipment_id = shipments.shipment_id",
+            "  Filter by type: WHERE document_type = 'invoice' | 'bill_of_lading' | 'packing_list' | 'customs_declaration'",
+        ])
+
+        return "\n".join(lines)
 
     # ── Text Builders ────────────────────────────────────────────────
 

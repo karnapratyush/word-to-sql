@@ -144,19 +144,34 @@ TABLE_DESCRIPTIONS = [
     {
         "id": "table_extracted_documents",
         "text": (
-            "extracted_documents table: Data extracted from uploaded PDF/image documents by the vision AI agent. "
-            "Stores structured fields as JSON (flexible schema for different document types). "
-            "Fields have confidence scores. Documents can be linked to shipments. "
-            "Use when questions mention uploaded documents, extracted data, invoices from PDFs, "
-            "bills of lading, document confidence."
+            "extracted_documents table: Data extracted from uploaded PDF/image documents by the vision AI. "
+            "Each document's fields are stored as JSON in the extracted_fields column. "
+            "Use json_extract(extracted_fields, '$.field_name') to query specific fields. "
+            "Use when questions mention: uploaded documents, extracted data, BL number, vessel name, "
+            "shipper, consignee, scanned invoices, document confidence, or review status."
         ),
         "metadata": {
             "table": "extracted_documents",
             "columns": "id, document_id, document_type, file_name, upload_timestamp, extraction_model, overall_confidence, review_status, reviewed_at, extracted_fields (JSON), confidence_scores (JSON), raw_text, linked_shipment_id, notes",
             "row_count": 0,
-            "key_values": "document_type: invoice|bill_of_lading|packing_list|customs_declaration. review_status: pending|approved|rejected|corrected. Query JSON fields with: json_extract(extracted_fields, '$.field_name')",
+            "key_values": (
+                "document_type: invoice|bill_of_lading|packing_list|customs_declaration. "
+                "review_status: pending|approved|rejected|corrected. "
+                "INVOICE JSON fields: invoice_number, invoice_date, vendor_name, buyer_name, total_amount, currency, tax_amount, subtotal, line_items, payment_terms, due_date, po_number, shipment_reference. "
+                "BILL OF LADING JSON fields: bl_number, shipper_name, consignee_name, notify_party, vessel_name, voyage_number, port_of_loading, port_of_discharge, container_numbers, description_of_goods, gross_weight, measurement, date_of_issue, number_of_packages. "
+                "PACKING LIST JSON fields: packing_list_number, date, shipper, consignee, items, total_packages, total_gross_weight, total_net_weight, total_volume. "
+                "CUSTOMS DECLARATION JSON fields: declaration_number, date, importer_name, exporter_name, country_of_origin, hs_code, description_of_goods, quantity, declared_value, currency, duty_amount. "
+                "Query example: json_extract(extracted_fields, '$.bl_number')"
+            ),
             "joins": "LEFT JOIN shipments ON extracted_documents.linked_shipment_id = shipments.shipment_id",
-            "example": "This table starts empty. Documents are added when users upload PDFs via the vision agent. Example: an uploaded Maersk invoice might have extracted_fields = {\"invoice_number\": \"INV-EXT-001\", \"vendor\": \"Maersk\", \"total_amount\": 5000.00}",
+            "example": (
+                "Invoice: json_extract(extracted_fields, '$.invoice_number') = 'INV-TEST-LINKAGE-001', "
+                "json_extract(extracted_fields, '$.total_amount') = 5280.00, "
+                "json_extract(extracted_fields, '$.vendor_name') = 'Wan Hai Lines'. "
+                "BOL: json_extract(extracted_fields, '$.bl_number') = 'BL-2024-KR-US-0841', "
+                "json_extract(extracted_fields, '$.vessel_name') = 'EVER ACE', "
+                "json_extract(extracted_fields, '$.port_of_loading') = 'Port of Busan'"
+            ),
         },
     },
 ]
@@ -232,5 +247,24 @@ RELATIONSHIP_DESCRIPTIONS = [
             "Example: CUST-03786 has invoice INV-2024-006279 ($30,414.10, OVERDUE)."
         ),
         "metadata": {"from_table": "customers", "to_table": "invoices", "join_key": "invoices.customer_id = customers.id"},
+    },
+    {
+        "id": "rel_extracted_docs_shipments",
+        "text": (
+            "Relationship: extracted_documents → shipments. Extracted documents can be linked "
+            "to shipments via linked_shipment_id. This enables comparing extracted PDF data "
+            "with actual shipment records. "
+            "JOIN: extracted_documents.linked_shipment_id = shipments.shipment_id. "
+            "NOTE: linked_shipment_id matches shipments.shipment_id (TEXT), NOT shipments.id (INTEGER). "
+            "Use json_extract(extracted_fields, '$.field_name') to access document fields in the JOIN. "
+            "Example: Compare extracted invoice total with actual shipment charges: "
+            "SELECT json_extract(e.extracted_fields, '$.total_amount') as extracted_amount, "
+            "SUM(sc.amount_usd) as actual_charges "
+            "FROM extracted_documents e "
+            "JOIN shipments s ON e.linked_shipment_id = s.shipment_id "
+            "JOIN shipment_charges sc ON s.id = sc.shipment_id "
+            "GROUP BY e.document_id"
+        ),
+        "metadata": {"from_table": "extracted_documents", "to_table": "shipments", "join_key": "extracted_documents.linked_shipment_id = shipments.shipment_id"},
     },
 ]

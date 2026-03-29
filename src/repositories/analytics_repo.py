@@ -127,122 +127,12 @@ class AnalyticsRepository(BaseRepository):
 
             parts.append(part)
 
-        # Append known JSON field names from extracted_documents.
-        # These come from the in-memory set maintained by vision/storage.py.
-        # The LLM needs to know these exist so it can write json_extract() queries.
-        json_fields_section = self._build_json_fields_section()
-        if json_fields_section:
-            parts.append(json_fields_section)
+        # Note: extracted_documents JSON field names are injected by the
+        # vector store's retrieve_context() — always appended regardless
+        # of similarity score. See vector_store._build_extracted_docs_context().
+        # No need to duplicate that here.
 
         return "\n\n".join(parts)
-
-    def _build_json_fields_section(self) -> str:
-        """Build a schema hint listing JSON field names inside extracted_documents.
-
-        Reads the known fields set from vision/storage.py and formats them
-        as a section in the schema description. This tells the LLM:
-        - What field names exist inside the extracted_fields JSON column
-        - How to query them using json_extract()
-
-        The LLM sees this and knows to write:
-            json_extract(extracted_fields, '$.bl_number')
-        instead of trying to find bl_number as a regular column.
-
-        Returns:
-            Multi-line string, or empty string if no fields are known.
-        """
-        try:
-            from src.vision.storage import get_known_fields
-            fields = get_known_fields()
-        except Exception:
-            fields = set()
-
-        if not fields:
-            return ""
-
-        lines = [
-            "EXTRACTED DOCUMENT JSON FIELDS (inside extracted_documents.extracted_fields):",
-            "  These fields are stored as JSON. Query them with json_extract():",
-            "    json_extract(extracted_fields, '$.FIELD_NAME')",
-            "  Available fields:",
-        ]
-        for field_name in sorted(fields):
-            lines.append(f"    - {field_name}")
-
-        lines.append("")
-        lines.append("  Example: SELECT json_extract(extracted_fields, '$.bl_number') as bl_number FROM extracted_documents")
-        lines.append("  Example: SELECT * FROM extracted_documents WHERE json_extract(extracted_fields, '$.bl_number') = 'BL-2024-XXX'")
-
-        return "\n".join(lines)
-
-    def _build_extracted_fields_table(self) -> str:
-        """Build a virtual table description showing extracted JSON fields as columns.
-
-        Reads actual stored documents, collects all field names from the JSON,
-        and presents them as if they were regular table columns. This way the
-        LLM can write queries like:
-            SELECT * FROM extracted_document_fields WHERE bl_number = 'BL-2024-XXX'
-
-        The actual SQL uses json_extract(), but the LLM doesn't need to know that.
-        We tell it: "To query this table, use json_extract(extracted_fields, '$.column_name')
-        on the extracted_documents table."
-
-        Returns:
-            Table description string, or empty string if no documents exist.
-        """
-        try:
-            import json
-            rows = self._execute(
-                "SELECT document_type, extracted_fields FROM extracted_documents"
-            )
-
-            if not rows:
-                return ""
-
-            # Collect all field names across all documents, grouped by type
-            all_fields: dict[str, str] = {}  # field_name -> sample_value
-            type_fields: dict[str, list[str]] = {}  # doc_type -> [field_names]
-
-            for row in rows:
-                doc_type = row.get("document_type", "unknown")
-                fields_str = row.get("extracted_fields", "{}")
-                if isinstance(fields_str, str):
-                    fields = json.loads(fields_str)
-                else:
-                    fields = fields_str
-
-                type_fields.setdefault(doc_type, [])
-                for field_name, value in fields.items():
-                    if field_name not in all_fields:
-                        # Store a sample value for the LLM to understand the data
-                        sample = str(value)[:50] if value is not None else "NULL"
-                        all_fields[field_name] = sample
-                    if field_name not in type_fields[doc_type]:
-                        type_fields[doc_type].append(field_name)
-
-            # Build the virtual table description
-            lines = [
-                f"VIRTUAL TABLE: extracted_document_fields ({len(rows)} rows, derived from extracted_documents.extracted_fields JSON)",
-                "    NOTE: This is NOT a real table. To query these fields, use:",
-                "      json_extract(extracted_fields, '$.FIELD_NAME') on the extracted_documents table.",
-                "    Example: SELECT json_extract(extracted_fields, '$.bl_number') as bl_number FROM extracted_documents",
-                "",
-                "    Available columns (from JSON):",
-            ]
-
-            for field_name in sorted(all_fields.keys()):
-                sample = all_fields[field_name]
-                lines.append(f"    {field_name} TEXT -- e.g. \"{sample}\"")
-
-            # Show which fields belong to which document type
-            lines.append("")
-            for doc_type, fnames in type_fields.items():
-                lines.append(f"    Document type '{doc_type}': {', '.join(sorted(fnames))}")
-
-            return "\n".join(lines)
-
-        except Exception:
-            return ""
 
     def get_table_names(self) -> list[str]:
         """Return list of all user-created table names.

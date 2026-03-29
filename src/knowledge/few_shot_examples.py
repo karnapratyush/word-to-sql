@@ -456,4 +456,97 @@ FEW_SHOT_EXAMPLES = [
         "tables": ["extracted_documents", "shipments", "tracking_events"],
         "complexity": "hard",
     },
+
+    # ── More extracted doc patterns — covering all document types ─────
+
+    {
+        "id": "fs_extracted_bol_vessel",
+        "question": "Show all vessel names and ports from extracted bills of lading",
+        "sql": (
+            "SELECT json_extract(extracted_fields, '$.bl_number') as bl_number, "
+            "json_extract(extracted_fields, '$.vessel_name') as vessel_name, "
+            "json_extract(extracted_fields, '$.port_of_loading') as loading_port, "
+            "json_extract(extracted_fields, '$.port_of_discharge') as discharge_port, "
+            "json_extract(extracted_fields, '$.shipper_name') as shipper "
+            "FROM extracted_documents "
+            "WHERE document_type = 'bill_of_lading' "
+            "LIMIT 20"
+        ),
+        "tables": ["extracted_documents"],
+        "complexity": "medium",
+    },
+    {
+        "id": "fs_extracted_packing_weights",
+        "question": "Show packing list weights and package counts",
+        "sql": (
+            "SELECT json_extract(extracted_fields, '$.packing_list_number') as pl_number, "
+            "json_extract(extracted_fields, '$.total_gross_weight') as gross_weight, "
+            "json_extract(extracted_fields, '$.total_net_weight') as net_weight, "
+            "json_extract(extracted_fields, '$.total_packages') as packages "
+            "FROM extracted_documents "
+            "WHERE document_type = 'packing_list' "
+            "LIMIT 20"
+        ),
+        "tables": ["extracted_documents"],
+        "complexity": "medium",
+    },
+    {
+        "id": "fs_extracted_customs_value",
+        "question": "What is the declared value on customs declarations?",
+        "sql": (
+            "SELECT json_extract(extracted_fields, '$.declaration_number') as declaration, "
+            "json_extract(extracted_fields, '$.declared_value') as declared_value, "
+            "json_extract(extracted_fields, '$.country_of_origin') as origin, "
+            "json_extract(extracted_fields, '$.hs_code') as hs_code "
+            "FROM extracted_documents "
+            "WHERE document_type = 'customs_declaration' "
+            "LIMIT 20"
+        ),
+        "tables": ["extracted_documents"],
+        "complexity": "medium",
+    },
+    {
+        "id": "fs_extracted_count_by_type",
+        "question": "How many documents of each type have been uploaded?",
+        "sql": (
+            "SELECT document_type, COUNT(*) as count, "
+            "ROUND(AVG(overall_confidence), 2) as avg_confidence "
+            "FROM extracted_documents "
+            "GROUP BY document_type "
+            "ORDER BY count DESC"
+        ),
+        "tables": ["extracted_documents"],
+        "complexity": "simple",
+    },
+    {
+        "id": "fs_extracted_shipper_consignee",
+        "question": "Show shipper and consignee for all extracted documents",
+        "sql": (
+            "SELECT document_type, "
+            "json_extract(extracted_fields, '$.shipper_name') as shipper, "
+            "json_extract(extracted_fields, '$.consignee_name') as consignee, "
+            "json_extract(extracted_fields, '$.vendor_name') as vendor, "
+            "json_extract(extracted_fields, '$.buyer_name') as buyer "
+            "FROM extracted_documents "
+            "LIMIT 20"
+        ),
+        "tables": ["extracted_documents"],
+        "complexity": "simple",
+    },
+    {
+        "id": "fs_extracted_with_carrier",
+        "question": "Show extracted documents with their linked carrier details",
+        "sql": (
+            "SELECT e.document_type, "
+            "json_extract(e.extracted_fields, '$.bl_number') as bl_number, "
+            "json_extract(e.extracted_fields, '$.invoice_number') as invoice_number, "
+            "s.shipment_id, c.carrier_name, c.carrier_type "
+            "FROM extracted_documents e "
+            "JOIN shipments s ON e.linked_shipment_id = s.shipment_id "
+            "JOIN carriers c ON s.carrier_id = c.id "
+            "LIMIT 20"
+        ),
+        "tables": ["extracted_documents", "shipments", "carriers"],
+        "complexity": "hard",
+    },
 ]

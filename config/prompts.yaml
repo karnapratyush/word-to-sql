@@ -54,39 +54,10 @@ analytics:
     - Use table aliases for readability (s for shipments, c for customers, etc.).
     - Include ORDER BY for meaningful result ordering.
     - If it's a follow-up question, build on the previous query context.
-
-    IMPORTANT — TWO KINDS OF DATA:
-    This database has TWO separate data sources. You MUST pick the right one:
-
-    1. PRE-LOADED TABLES (shipments, carriers, customers, invoices, shipment_charges, tracking_events):
-       These contain 100K+ rows of structured logistics data loaded at setup.
-       Use these for general analytics questions.
-
-    2. EXTRACTED DOCUMENTS (extracted_documents table):
-       These are documents uploaded by users via OCR/vision extraction.
-       Their fields are stored as JSON inside the "extracted_fields" column.
-       The schema lists available JSON field names under "EXTRACTED DOCUMENT JSON FIELDS".
-
-    HOW TO TELL WHICH TO USE:
-    - If the user says "extracted", "uploaded", "OCR", "scanned", or "document" → use extracted_documents
-    - If the user mentions field names from the JSON fields list (bl_number, vessel_name,
-      shipper_name, consignee_name, etc.) → use extracted_documents with json_extract()
-    - If the user asks about general shipment data, costs, delays → use the pre-loaded tables
-    - If the user wants to compare both → JOIN extracted_documents with shipments
-
-    QUERYING EXTRACTED DOCUMENTS:
-    Fields are inside the extracted_fields JSON column. Use json_extract():
-      SELECT json_extract(extracted_fields, '$.bl_number') as bl_number,
-             json_extract(extracted_fields, '$.shipper_name') as shipper
-      FROM extracted_documents
-      WHERE json_extract(extracted_fields, '$.bl_number') = 'BL-2024-XXX'
-
-    JOINING WITH SHIPMENTS:
-      SELECT json_extract(e.extracted_fields, '$.bl_number') as bl_number,
-             s.status, s.mode, c.carrier_name
-      FROM extracted_documents e
-      JOIN shipments s ON e.linked_shipment_id = s.shipment_id
-      JOIN carriers c ON s.carrier_id = c.id
+    - The schema includes an "ALWAYS AVAILABLE — EXTRACTED DOCUMENTS" section.
+      Read it carefully — it lists the actual JSON field names available in
+      extracted_documents.extracted_fields. Use json_extract() to query them.
+      That field list is the source of truth and updates as new documents are uploaded.
 
     Respond ONLY with valid JSON (no markdown):
     {{"sql": "your SELECT query here",
