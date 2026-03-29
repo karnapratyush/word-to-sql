@@ -1,7 +1,7 @@
 """Document Upload Page -- Vision Document Extraction with Human-in-the-Loop Review.
 
 This Streamlit page provides a full document upload and review interface
-for the GoComet AI vision extraction pipeline. Users can:
+for the   AI vision extraction pipeline. Users can:
 
 1. Upload a PDF, PNG, or JPG document
 2. Optionally select a document type hint (or let the AI auto-detect)
@@ -40,7 +40,7 @@ import pandas as pd
 
 # ── Page Configuration ───────────────────────────────────────────────
 st.set_page_config(
-    page_title="Document Upload | GoComet AI",
+    page_title="Document Upload |   AI",
     page_icon="📄",
     layout="wide",
 )
@@ -129,27 +129,13 @@ st.subheader("Upload Document")
 uploaded_file = st.file_uploader(
     "Choose a document file",
     type=["pdf", "png", "jpg", "jpeg"],
-    help="Supported formats: PDF, PNG, JPG. Maximum size: 10 MB.",
+    help="Supported formats: PDF, PNG, JPG. Maximum size: 10 MB. English documents only.",
 )
 
-# Optional document type dropdown -- user can let the AI auto-detect
-# or provide a hint to improve extraction accuracy.
-doc_type_options = [
-    "auto-detect",
-    "invoice",
-    "bill_of_lading",
-    "packing_list",
-    "customs_declaration",
-]
-selected_doc_type = st.selectbox(
-    "Document Type (optional)",
-    options=doc_type_options,
-    index=0,
-    help="Select a document type to improve extraction accuracy, or leave as 'auto-detect' for AI classification.",
-)
-
-# Convert the selection to a hint value (None for auto-detect)
-doc_type_hint = None if selected_doc_type == "auto-detect" else selected_doc_type
+# Document type is always auto-detected by the vision LLM.
+# The classifier also checks the language and rejects non-English documents.
+# No manual type selection — the AI handles classification.
+doc_type_hint = None
 
 # Extract button -- only enabled when a file is uploaded
 extract_button = st.button(

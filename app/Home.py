@@ -1,4 +1,4 @@
-"""GoComet AI Logistics Assistant — Home Page.
+"""  AI Logistics Assistant — Home Page.
 
 This is the Streamlit landing page that provides:
 - App title and description
@@ -21,12 +21,12 @@ import streamlit as st
 
 # ── Page Configuration ───────────────────────────────────────────────
 st.set_page_config(
-    page_title="GoComet AI Logistics Assistant",
+    page_title="  AI Logistics Assistant",
     page_icon="🚢",
     layout="wide",
 )
 
-st.title("🚢 GoComet AI Logistics Assistant")
+st.title("🚢   AI Logistics Assistant")
 st.markdown("**Agentic Analytics + Vision Document Extraction** for logistics data")
 
 st.divider()
@@ -87,38 +87,28 @@ st.divider()
 # Link to the three main capabilities
 st.subheader("Capabilities")
 
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### 📊 Analytics")
-    st.markdown("Ask questions about shipments, carriers, costs, and delays in natural language.")
-    st.page_link("pages/1_Analytics.py", label="Open Analytics Chat", icon="💬")
+    st.markdown("### Analytics Chat")
+    st.markdown("Ask questions about shipments, costs, delays, AND extracted documents — all in one place.")
+    st.page_link("pages/1_Analytics.py", label="Open Analytics Chat")
 
 with col2:
-    st.markdown("### 📄 Document Upload")
-    st.markdown("Upload invoices, bills of lading, or packing lists for AI extraction.")
-    st.page_link("pages/2_Document_Upload.py", label="Upload Documents", icon="📤")
-
-with col3:
-    st.markdown("### 🔗 Query Documents")
-    st.markdown("Query extracted document data alongside shipment analytics.")
-    st.page_link("pages/3_Query_Documents.py", label="Query Documents", icon="🔍")
+    st.markdown("### Document Upload")
+    st.markdown("Upload invoices or bills of lading. AI extracts fields, you review and approve.")
+    st.page_link("pages/2_Document_Upload.py", label="Upload Documents")
 
 st.divider()
 
-# ── Sample Questions ─────────────────────────────────────────────────
-# Provide example queries to help users get started
-st.subheader("Sample Analytics Questions")
+st.subheader("Try These Questions")
 
 samples = [
-    "How many shipments are currently delayed?",
-    "What is the average freight cost by carrier for ocean shipments?",
-    "Show me the top 5 routes by shipment volume",
-    "Which carriers have the highest delay rate?",
-    "Monthly shipment count trend for 2024",
-    "Compare ocean vs air shipping costs",
-    "What are the most common delay reasons?",
-    "Show total invoice amount by payment status",
+    "How many shipments are delayed?",
+    "Average freight cost by carrier",
+    "Top 5 carriers by delay rate",
+    "Show all extracted documents",
+    "Which shipments have linked documents?",
 ]
 
 for q in samples:

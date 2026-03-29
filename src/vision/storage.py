@@ -1,22 +1,22 @@
 """Vision document storage facade.
 
-This module provides backward-compatible module-level functions that
-delegate to DocumentRepository. Existing code can continue to use:
+This module provides module-level functions that delegate to DocumentRepository.
 
     from src.vision.storage import store_extraction, get_extracted_documents
 
-These functions handle the translation between domain schemas
-(ExtractionResult, DocumentRecord) and the repository's flat
-parameter interface. Specifically, they:
-- Generate a UUID for new documents
-- Flatten FieldExtraction objects into simple dicts for storage
-- Create DocumentRecord objects from the stored data
-- Rebuild the extracted_document_fields SQL VIEW after each insert
+Key responsibilities:
+- Generate UUIDs for new documents
+- Flatten FieldExtraction objects into simple dicts for JSON storage
+- Auto-link documents to shipments via shipment_ref / po_number matching
+- Maintain an in-memory set of known JSON field names (_known_fields)
+- Provide get_known_fields() for the schema description builder
 
-The VIEW trick: extracted_documents stores fields as JSON. Instead of
-making the LLM write json_extract() calls, we create a SQL VIEW that
-flattens all JSON fields into regular columns. The LLM sees it as a
-normal table and writes simple SELECT queries against it.
+The _known_fields set:
+  On startup, we read all stored documents and collect every unique JSON
+  field name. When new documents are uploaded, the set grows. This set is
+  used by analytics_repo.get_schema_description() to tell the LLM what
+  fields exist inside extracted_documents.extracted_fields JSON, so the
+  LLM can write json_extract() queries against them.
 """
 
 import json
@@ -30,73 +30,17 @@ from src.repositories.document_repo import DocumentRepository
 logger = logging.getLogger(__name__)
 
 
-# ── Auto-Linking ─────────────────────────────────────────────────────
-
-def _try_auto_link(extracted_fields: dict, repo: DocumentRepository) -> str | None:
-    """Try to automatically link an extracted document to a shipment.
-
-    Checks extracted fields for shipment references (shipment_ref, po_number,
-    shipment_id) and looks them up in the shipments table. Returns the
-    matching shipment_id if found, None otherwise.
-
-    This enables Capability C (linkage) — extracted documents become
-    queryable alongside shipment data via JOINs.
-
-    Args:
-        extracted_fields: Flat dict of field_name → value from extraction.
-        repo: DocumentRepository instance for database lookups.
-
-    Returns:
-        A shipment_id string if a match is found, None otherwise.
-    """
-    # Fields that might contain a shipment reference
-    ref_fields = ["shipment_ref", "shipment_reference", "shipment_id", "po_number"]
-
-    for field_name in ref_fields:
-        ref_value = extracted_fields.get(field_name)
-        if not ref_value or not isinstance(ref_value, str):
-            continue
-
-        ref_value = ref_value.strip()
-        if not ref_value:
-            continue
-
-        # Try matching against shipments.shipment_id
-        try:
-            rows = repo._execute(
-                "SELECT shipment_id FROM shipments WHERE shipment_id = ? LIMIT 1",
-                (ref_value,),
-            )
-            if rows:
-                return rows[0]["shipment_id"]
-        except Exception:
-            pass
-
-        # Try matching against shipments.po_number
-        if field_name == "po_number":
-            try:
-                rows = repo._execute(
-                    "SELECT shipment_id FROM shipments WHERE po_number = ? LIMIT 1",
-                    (ref_value,),
-                )
-                if rows:
-                    return rows[0]["shipment_id"]
-            except Exception:
-                pass
-
-    return None
-
-
-# ── Known Fields Set + Dynamic VIEW ──────────────────────────────────
+# ── Known Fields Set ─────────────────────────────────────────────────
 #
-# Instead of rebuilding the VIEW on every insert, we maintain an in-memory
-# set of known field names. The VIEW is only rebuilt when NEW fields are
-# discovered (i.e., a document introduces a field name we haven't seen).
+# In-memory set of all JSON field names seen across extracted documents.
+# Used by the schema description to tell the LLM what columns exist
+# inside the extracted_fields JSON blob.
 #
 # Flow:
-#   Startup: load all field names from DB → _known_fields set → build VIEW
-#   Upload:  check if new fields exist → if yes, update set + rebuild VIEW
-#                                       → if no, skip (fast path)
+#   Startup:  load all field names from DB → _known_fields
+#   Upload:   add new field names to _known_fields (if any)
+#   Query:    analytics_repo reads _known_fields via get_known_fields()
+#             and includes them in the schema description sent to the LLM
 
 _known_fields: set[str] = set()
 
@@ -104,7 +48,7 @@ _known_fields: set[str] = set()
 def _load_known_fields(repo: DocumentRepository) -> set[str]:
     """Read all stored documents and collect every unique JSON field name.
 
-    This is called once at startup to populate the _known_fields set.
+    Called once at startup to populate _known_fields.
 
     Args:
         repo: DocumentRepository instance for database access.
@@ -127,94 +71,11 @@ def _load_known_fields(repo: DocumentRepository) -> set[str]:
     return fields
 
 
-def _build_view(repo: DocumentRepository, fields: set[str]) -> None:
-    """Create or replace the extracted_document_fields SQL VIEW.
+def init_known_fields(db_path: str | None = None) -> None:
+    """Initialize the known fields set at application startup.
 
-    The VIEW flattens extracted_documents.extracted_fields JSON into
-    regular columns. The LLM queries it like a normal table:
-        SELECT bl_number, vessel_name FROM extracted_document_fields
-
-    Internally, each column is a json_extract() call, but the LLM
-    never needs to know that.
-
-    Args:
-        repo: DocumentRepository instance for database access.
-        fields: Set of JSON field names to expose as columns.
-    """
-    if not fields:
-        return
-
-    # Base columns from extracted_documents (non-JSON, always present)
-    base_columns = [
-        "document_id",
-        "document_type",
-        "file_name",
-        "overall_confidence",
-        "review_status",
-        "linked_shipment_id",
-        "upload_timestamp",
-    ]
-
-    # JSON field columns — one json_extract() call per field name
-    json_columns = []
-    for field_name in sorted(fields):
-        # Sanitize: only alphanumeric and underscore allowed in column names
-        safe_name = "".join(c if c.isalnum() or c == "_" else "_" for c in field_name)
-        json_columns.append(
-            f"json_extract(extracted_fields, '$.{field_name}') as {safe_name}"
-        )
-
-    all_columns = base_columns + json_columns
-    columns_sql = ",\n        ".join(all_columns)
-
-    view_sql = f"""
-    CREATE VIEW IF NOT EXISTS extracted_document_fields AS
-    SELECT
-        {columns_sql}
-    FROM extracted_documents
-    """
-
-    try:
-        conn = repo._get_connection()
-        conn.execute("DROP VIEW IF EXISTS extracted_document_fields")
-        conn.execute(view_sql)
-        conn.commit()
-        logger.info(
-            "Built extracted_document_fields VIEW with %d JSON columns: %s",
-            len(json_columns), sorted(fields),
-        )
-    except Exception as e:
-        logger.warning("Failed to build extracted_document_fields VIEW: %s", e)
-
-
-def _maybe_rebuild_view(repo: DocumentRepository, new_fields: dict) -> None:
-    """Rebuild the VIEW only if the new document introduces unknown fields.
-
-    Compares the incoming field names against _known_fields. If there are
-    new ones, updates the set and rebuilds the VIEW. Otherwise, skips
-    (fast path — no DB operations).
-
-    Args:
-        repo: DocumentRepository instance.
-        new_fields: Field name → value dict from the newly stored document.
-    """
-    global _known_fields
-    incoming = set(new_fields.keys())
-    new_names = incoming - _known_fields
-
-    if new_names:
-        logger.info("New fields discovered: %s — rebuilding VIEW", new_names)
-        _known_fields.update(new_names)
-        _build_view(repo, _known_fields)
-    else:
-        logger.debug("No new fields — VIEW rebuild skipped")
-
-
-def rebuild_view_on_startup(db_path: str | None = None) -> None:
-    """Initialize the known fields set and build the VIEW at startup.
-
-    Called from FastAPI lifespan to ensure the VIEW exists and the
-    _known_fields set is populated before any queries arrive.
+    Called from FastAPI lifespan to populate _known_fields before any
+    queries arrive. After this, get_known_fields() returns the full set.
 
     Args:
         db_path: Optional database path override.
@@ -222,12 +83,127 @@ def rebuild_view_on_startup(db_path: str | None = None) -> None:
     global _known_fields
     repo = DocumentRepository(db_path=db_path)
     _known_fields = _load_known_fields(repo)
+    logger.info("Startup: loaded %d known extracted fields: %s",
+                len(_known_fields), sorted(_known_fields))
 
-    if _known_fields:
-        _build_view(repo, _known_fields)
-        logger.info("Startup: loaded %d known fields, VIEW built", len(_known_fields))
-    else:
-        logger.info("Startup: no extracted documents yet, VIEW not created")
+
+def get_known_fields() -> set[str]:
+    """Return the current set of known JSON field names.
+
+    Used by analytics_repo.get_schema_description() to include
+    extracted document field names in the schema sent to the LLM.
+
+    Returns:
+        Frozen copy of the known fields set.
+    """
+    return _known_fields.copy()
+
+
+def _update_known_fields(new_fields: dict) -> None:
+    """Add any new field names from an uploaded document to the set.
+
+    Called after each document insert. If the document has field names
+    we haven't seen before, they're added to the set.
+
+    Args:
+        new_fields: Field name → value dict from the newly stored document.
+    """
+    global _known_fields
+    incoming = set(new_fields.keys())
+    new_names = incoming - _known_fields
+    if new_names:
+        _known_fields.update(new_names)
+        logger.info("New fields discovered: %s (total now: %d)",
+                    new_names, len(_known_fields))
+
+
+# ── Auto-Linking ─────────────────────────────────────────────────────
+
+def _try_auto_link(extracted_fields: dict, repo: DocumentRepository) -> str | None:
+    """Try to automatically link an extracted document to a shipment.
+
+    Searches multiple tables in priority order for a matching reference:
+    1. shipments.shipment_id (direct match on shipment reference)
+    2. shipments.po_number (match on purchase order number)
+    3. invoices.invoice_number → invoices.shipment_id (match via invoice)
+
+    Stops at the first match found. Returns the shipment_id to store
+    in extracted_documents.linked_shipment_id for JOIN queries.
+
+    Args:
+        extracted_fields: Flat dict of field_name → value from extraction.
+        repo: DocumentRepository instance for database lookups.
+
+    Returns:
+        A shipment_id string if a match is found, None otherwise.
+    """
+    # Priority 1: Direct shipment reference fields → shipments.shipment_id
+    for field_name in ["shipment_ref", "shipment_reference", "shipment_id"]:
+        ref_value = _get_clean_value(extracted_fields, field_name)
+        if not ref_value:
+            continue
+        try:
+            rows = repo._execute(
+                "SELECT shipment_id FROM shipments WHERE shipment_id = ? LIMIT 1",
+                (ref_value,),
+            )
+            if rows:
+                logger.info("Auto-linked via %s → shipments.shipment_id: %s",
+                           field_name, rows[0]["shipment_id"])
+                return rows[0]["shipment_id"]
+        except Exception:
+            pass
+
+    # Priority 2: PO number → shipments.po_number
+    po_value = _get_clean_value(extracted_fields, "po_number")
+    if po_value:
+        try:
+            rows = repo._execute(
+                "SELECT shipment_id FROM shipments WHERE po_number = ? LIMIT 1",
+                (po_value,),
+            )
+            if rows:
+                logger.info("Auto-linked via po_number → shipments.po_number: %s",
+                           rows[0]["shipment_id"])
+                return rows[0]["shipment_id"]
+        except Exception:
+            pass
+
+    # Priority 3: Invoice number → invoices.invoice_number → invoices.shipment_id
+    inv_value = _get_clean_value(extracted_fields, "invoice_number")
+    if inv_value:
+        try:
+            rows = repo._execute(
+                "SELECT s.shipment_id FROM invoices i "
+                "JOIN shipments s ON i.shipment_id = s.id "
+                "WHERE i.invoice_number = ? LIMIT 1",
+                (inv_value,),
+            )
+            if rows:
+                logger.info("Auto-linked via invoice_number → invoices → shipments: %s",
+                           rows[0]["shipment_id"])
+                return rows[0]["shipment_id"]
+        except Exception:
+            pass
+
+    return None
+
+
+def _get_clean_value(fields: dict, key: str) -> str | None:
+    """Get a trimmed string value from a dict, or None if empty/missing.
+
+    Args:
+        fields: Flat dict of field_name → value.
+        key: The key to look up.
+
+    Returns:
+        Trimmed string value, or None if missing/empty/non-string.
+    """
+    value = fields.get(key)
+    if not value or not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value if value else None
 
 
 # ── Document Storage ─────────────────────────────────────────────────
@@ -239,8 +215,9 @@ def store_extraction(
 ) -> DocumentRecord:
     """Store a validated extraction result into the extracted_documents table.
 
-    Generates a unique document_id (UUID), flattens the FieldExtraction
-    objects into simple value/confidence dicts, and inserts the record.
+    Also:
+    - Auto-links to a shipment if a matching reference is found
+    - Updates the in-memory _known_fields set with any new field names
 
     Args:
         result: The extraction result from the vision pipeline.
@@ -253,9 +230,6 @@ def store_extraction(
     repo = DocumentRepository(db_path=db_path)
     document_id = str(uuid.uuid4())
 
-    # Flatten FieldExtraction objects into simple dicts for JSON storage.
-    # FieldExtraction has .value and .confidence attributes; we extract
-    # each into a separate dict for the repository.
     extracted_fields = {
         name: field.value for name, field in result.fields.items()
     }
@@ -263,12 +237,8 @@ def store_extraction(
         name: field.confidence for name, field in result.fields.items()
     }
 
-    # Auto-link: check if extracted fields contain a shipment reference
-    # that matches a real shipment in the database. This enables the
-    # linkage queries (Capability C) between extracted docs and shipments.
     linked_shipment_id = _try_auto_link(extracted_fields, repo)
 
-    # Insert into the database via repository
     repo.insert_document(
         document_id=document_id,
         document_type=result.document_type,
@@ -278,15 +248,13 @@ def store_extraction(
         extracted_fields=extracted_fields,
         confidence_scores=confidence_scores,
         raw_text=result.raw_text,
-        notes=result.notes or None,  # Convert empty string to None
+        notes=result.notes or None,
         linked_shipment_id=linked_shipment_id,
     )
 
-    # Check if this document introduces new fields. If yes, rebuild the VIEW.
-    # If no (same fields as before), skip — fast path, no DB operations.
-    _maybe_rebuild_view(repo, extracted_fields)
+    # Update the in-memory set with any new field names
+    _update_known_fields(extracted_fields)
 
-    # Return a DocumentRecord with the linked shipment if found
     return DocumentRecord(
         linked_shipment_id=linked_shipment_id,
         document_id=document_id,
@@ -294,7 +262,7 @@ def store_extraction(
         file_name=file_name,
         extraction_model=result.model_used,
         overall_confidence=result.overall_confidence,
-        review_status=ReviewStatus.PENDING,  # All new documents start as pending
+        review_status=ReviewStatus.PENDING,
         extracted_fields=extracted_fields,
         confidence_scores=confidence_scores,
     )
@@ -313,8 +281,7 @@ def update_review_status(
     Args:
         document_id: UUID of the document to update.
         status: New status string (pending, approved, rejected, corrected).
-        corrected_fields: If provided, replaces the stored extracted_fields
-            with human-corrected values.
+        corrected_fields: If provided, replaces the stored extracted_fields.
         db_path: Optional database path override.
     """
     repo = DocumentRepository(db_path=db_path)
@@ -325,9 +292,6 @@ def update_review_status(
 
 def get_extracted_documents(db_path: Optional[str] = None) -> list[dict]:
     """Retrieve all extracted documents from the database.
-
-    Returns documents ordered by upload time (newest first),
-    with JSON fields parsed back to Python dicts.
 
     Args:
         db_path: Optional database path override.

@@ -17,7 +17,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_DIR"
 
-echo "=== GoComet AI Logistics Assistant ==="
+echo "===   AI Logistics Assistant ==="
 echo ""
 echo "Starting FastAPI on http://localhost:8000 ..."
 echo "Starting Streamlit on http://localhost:8501 ..."

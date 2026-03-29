@@ -21,7 +21,7 @@ app = create_app()
 
 if __name__ == "__main__":
     # Parse command-line arguments for server configuration
-    parser = argparse.ArgumentParser(description="GoComet AI Logistics API")
+    parser = argparse.ArgumentParser(description="  AI Logistics API")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")

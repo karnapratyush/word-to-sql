@@ -26,7 +26,7 @@ DEFAULT_TIMEOUT = 120.0
 
 
 class APIClient:
-    """HTTP client for the GoComet AI Logistics API.
+    """HTTP client for the   AI Logistics API.
 
     Wraps httpx to provide typed methods for each API endpoint.
     Each method creates a fresh httpx.Client context manager to

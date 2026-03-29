@@ -6,12 +6,15 @@ the user for review. The validator enriches the ExtractionResult by:
 
 1. Confidence threshold checks: Flag fields below the threshold as
    needs_review=True so the UI highlights them for human attention.
-2. Cross-field consistency checks: For invoices, verify that line items
-   sum to the subtotal; for bills of lading, check container count matches.
+2. Cross-field consistency checks: invoice (total=subtotal+tax),
+   bill of lading (loading port != discharge port), packing list
+   (gross >= net weight), customs declaration (declared value > 0).
 3. Completeness checks: Verify that all required fields for the document
    type are present (using expected_fields from prompts.yaml).
-4. Overall confidence recalculation: Recompute the average confidence
-   from all individual field confidences (correcting any LLM-provided value).
+
+Note: Overall confidence is NOT recalculated. We trust the LLM's original
+score (how clearly it could read the document). Consistency issues are
+surfaced as notes/warnings, not by lowering scores.
 
 Settings used (from config/settings.yaml):
     extraction.confidence_threshold: 0.7  -- fields below this get needs_review=True
@@ -154,6 +157,85 @@ def _check_bol_consistency(fields: dict[str, FieldExtraction]) -> list[str]:
     return warnings
 
 
+def _check_packing_list_consistency(fields: dict[str, FieldExtraction]) -> list[str]:
+    """Run consistency checks specific to packing list documents.
+
+    Checks:
+    - Total gross weight should be >= total net weight.
+    - Total packages should be a positive number.
+
+    Args:
+        fields: Dict mapping field names to FieldExtraction objects.
+
+    Returns:
+        List of warning/inconsistency messages.
+    """
+    warnings = []
+
+    gross = fields.get("total_gross_weight")
+    net = fields.get("total_net_weight")
+
+    if gross and net and gross.value is not None and net.value is not None:
+        try:
+            gross_val = float(str(gross.value).replace(",", "").split()[0])
+            net_val = float(str(net.value).replace(",", "").split()[0])
+            if net_val > gross_val:
+                warnings.append(
+                    f"Inconsistency: net weight ({net_val}) exceeds gross weight ({gross_val})."
+                )
+        except (ValueError, TypeError):
+            pass
+
+    packages = fields.get("total_packages")
+    if packages and packages.value is not None:
+        try:
+            pkg_val = float(str(packages.value).replace(",", "").split()[0])
+            if pkg_val <= 0:
+                warnings.append("Inconsistency: total_packages should be positive.")
+        except (ValueError, TypeError):
+            pass
+
+    return warnings
+
+
+def _check_customs_consistency(fields: dict[str, FieldExtraction]) -> list[str]:
+    """Run consistency checks specific to customs declaration documents.
+
+    Checks:
+    - Declared value should be positive.
+    - Country of origin should differ from destination (importer country).
+
+    Args:
+        fields: Dict mapping field names to FieldExtraction objects.
+
+    Returns:
+        List of warning/inconsistency messages.
+    """
+    warnings = []
+
+    declared_value = fields.get("declared_value")
+    if declared_value and declared_value.value is not None:
+        try:
+            val = float(str(declared_value.value).replace(",", "").replace("$", "").split()[0])
+            if val <= 0:
+                warnings.append("Inconsistency: declared_value should be positive.")
+        except (ValueError, TypeError):
+            pass
+
+    origin = fields.get("country_of_origin")
+    importer = fields.get("importer_name")
+    exporter = fields.get("exporter_name")
+
+    if origin and importer and origin.value and importer.value:
+        # If importer name contains the origin country, that's suspicious
+        if str(origin.value).lower() in str(importer.value).lower():
+            warnings.append(
+                "Possible inconsistency: importer appears to be in the same country as origin."
+            )
+
+    return warnings
+
+
 def _check_completeness(
     fields: dict[str, FieldExtraction],
     document_type: str,
@@ -185,22 +267,6 @@ def _check_completeness(
     return missing
 
 
-def _recalculate_overall_confidence(fields: dict[str, FieldExtraction]) -> float:
-    """Recalculate the overall confidence as the mean of all field confidences.
-
-    This ensures the overall_confidence value accurately reflects the
-    actual individual field scores, regardless of what the LLM reported.
-
-    Args:
-        fields: Dict mapping field names to FieldExtraction objects.
-
-    Returns:
-        The mean confidence score across all fields, or 0.0 if there are no fields.
-    """
-    if not fields:
-        return 0.0
-
-    total = sum(f.confidence for f in fields.values())
     return round(total / len(fields), 4)
 
 
@@ -271,6 +337,10 @@ def validate_extraction(
         consistency_warnings = _check_invoice_consistency(updated_fields)
     elif result.document_type == "bill_of_lading":
         consistency_warnings = _check_bol_consistency(updated_fields)
+    elif result.document_type == "packing_list":
+        consistency_warnings = _check_packing_list_consistency(updated_fields)
+    elif result.document_type == "customs_declaration":
+        consistency_warnings = _check_customs_consistency(updated_fields)
 
     if consistency_warnings:
         notes_parts.extend(consistency_warnings)
@@ -284,8 +354,10 @@ def validate_extraction(
         )
         logger.info("Missing fields for %s: %s", result.document_type, missing_fields)
 
-    # Step 4: Recalculate overall confidence
-    overall_confidence = _recalculate_overall_confidence(updated_fields)
+    # Keep the original overall confidence from the LLM — it reflects
+    # how clearly the model could read the document. Consistency warnings
+    # are added to notes instead of lowering the score.
+    overall_confidence = result.overall_confidence
 
     # Combine all notes
     combined_notes = " | ".join(notes_parts) if notes_parts else ""

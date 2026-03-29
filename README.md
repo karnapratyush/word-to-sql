@@ -1,6 +1,6 @@
-# GoComet AI Logistics Assistant
+#   AI Logistics Assistant
 
-An agentic AI system that converts natural language questions into SQL queries against a logistics database and extracts structured data from shipping documents using vision LLMs. Built as a proof of concept for GoComet's logistics platform.
+An agentic AI system that converts natural language questions into SQL queries against a logistics database and extracts structured data from shipping documents using vision LLMs. Built as a proof of concept for  's logistics platform.
 
 **What it does:**
 - **Analytics:** Ask "Which carriers have the highest delay rate?" and get back the SQL, a data table, a natural language answer, and an auto-generated Plotly chart.
@@ -523,6 +523,13 @@ The following changes would be needed to move from POC to production:
 **Row-Level Security.** Add tenant isolation so customers only see their own data. Currently, any query can access all 10K customers' shipments.
 
 **Cloud Document Storage.** Replace local filesystem (`db/uploads/`) with S3 or GCS. The storage layer (`src/vision/storage.py`) is already a separate module for this reason.
+
+**Document-Entity Relationship Table.** Currently, each extracted document has a single `linked_shipment_id` column linking it to one shipment. In production, a dedicated `extracted_document_links` table would support richer relationships:
+- One document linked to multiple records (e.g., an invoice referencing 3 shipments)
+- Links to multiple tables (shipments, invoices, carriers, customers) not just shipments
+- Link confidence tracking (1.0 for exact shipment_ref match, 0.8 for fuzzy carrier name match)
+- Link type auditing (matched on shipment_ref vs po_number vs invoice_number)
+- This enables queries like "show the carrier and customer details for this BOL" without the user knowing the join path. The auto-linker (`_try_auto_link` in storage.py) already matches against shipments.shipment_id, shipments.po_number, and invoices.invoice_number — the relationship table would formalize and extend this pattern.
 
 **Fine-Tuning for Unanswerable Detection.** The 60% unanswerable detection score is the biggest accuracy gap. Fine-tuning a small model on logistics-specific "answerable vs not" examples could push this to 95%+. Alternatively, a dedicated binary classifier as a pre-filter would be cheaper than fine-tuning.
 

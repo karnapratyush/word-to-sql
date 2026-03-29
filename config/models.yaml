@@ -37,7 +37,6 @@ task_routing:
     chain:
       # Vision-capable models for document extraction
       - { provider: openrouter, model: "google/gemini-2.5-flash" }      # Strong multimodal via OpenRouter
-      - { provider: google, model: "gemini-2.5-flash" }                 # Direct Google (may rate limit)
       - { provider: openrouter, model: "openai/gpt-4o-mini" }          # Cheap paid fallback
       - { provider: groq, model: "llama-3.2-90b-vision-preview" }      # Free vision
 

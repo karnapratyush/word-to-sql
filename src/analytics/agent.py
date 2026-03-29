@@ -110,7 +110,7 @@ def _run_pipeline(request: AnalyticsRequest) -> AnalyticsResponse:
 
     if planner_result.intent == Intent.GENERAL:
         return AnalyticsResponse(
-            answer="Hello! I'm the GoComet logistics analytics assistant. "
+            answer="Hello! I'm the   logistics analytics assistant. "
                    "Ask me questions about shipments, carriers, costs, delays, "
                    "invoices, or tracking events.",
         )

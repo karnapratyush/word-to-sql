@@ -185,37 +185,6 @@ def _pdf_to_images(file_bytes: bytes) -> list[bytes]:
         raise ExtractionError(f"Failed to convert PDF to images: {e}")
 
 
-def _check_language(text: str) -> bool:
-    """Quick heuristic check to determine if text appears to be English.
-
-    Checks whether the majority of characters in the text are ASCII/Latin
-    characters. This is a rough filter to reject documents in languages
-    that use non-Latin scripts (e.g., Chinese, Arabic, Cyrillic).
-
-    Documents with mostly Latin characters but in other European languages
-    (French, Spanish, etc.) will pass -- this is acceptable since the LLM
-    can often still extract structured fields from them.
-
-    Args:
-        text: The text to check.
-
-    Returns:
-        True if the text appears to be in a Latin-script language (likely English).
-        False if the text is predominantly non-Latin characters.
-    """
-    if not text or len(text.strip()) == 0:
-        # Empty text is not a language issue -- it means extraction got nothing
-        return True
-
-    # Count ASCII printable characters (letters, digits, punctuation, spaces)
-    ascii_count = sum(1 for c in text if ord(c) < 128)
-    total_count = len(text)
-
-    # If more than 60% of characters are ASCII, consider it Latin-script
-    ratio = ascii_count / total_count if total_count > 0 else 0
-    return ratio >= 0.6
-
-
 def _invoke_vision_model(messages: list[HumanMessage], trace_name: str = "vision") -> tuple:
     """Invoke a vision-capable LLM with multimodal (image + text) messages.
 
@@ -279,27 +248,29 @@ def _invoke_vision_model(messages: list[HumanMessage], trace_name: str = "vision
 
 
 def _classify_document(image_bytes: bytes) -> str:
-    """Classify the document type by sending the first page image to a vision LLM.
+    """Classify document language and type in a single vision LLM call.
 
-    Sends the image to the vision LLM with the classifier prompt from
-    config/prompts.yaml. The LLM responds with one of:
-    invoice, bill_of_lading, packing_list, customs_declaration, unknown.
+    Sends the first page image to the vision LLM with a prompt that asks
+    for both language and document type. The LLM responds with:
+        "english,invoice" or "non_english,unknown"
+
+    Rejects non-English documents immediately (before extraction) to
+    avoid wasting an expensive extraction LLM call.
 
     Args:
         image_bytes: PNG image bytes of the first page of the document.
 
     Returns:
         The classified document type string (one of the known types).
-        Falls back to "unknown" if classification fails or returns an
-        unrecognized type.
+
+    Raises:
+        UnsupportedFileError: If the document is not in English.
     """
     prompts = load_prompts()
     classifier_prompt = prompts.get("vision", {}).get("classifier", "What type of document is this?")
 
-    # Encode the image as base64 for the multimodal message
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-    # Build a multimodal message with text + image
     message = HumanMessage(content=[
         {"type": "text", "text": classifier_prompt},
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
@@ -307,20 +278,43 @@ def _classify_document(image_bytes: bytes) -> str:
 
     try:
         response_text, model_name = _invoke_vision_model([message], trace_name="vision_classify")
-        # Clean and normalize the response
-        doc_type = response_text.strip().lower().replace(" ", "_")
+        response_clean = response_text.strip().lower().replace(" ", "")
 
-        # Remove any extra text/punctuation the LLM might have added
-        # Look for a known type within the response
+        # Parse "language,type" format (e.g., "english,invoice")
+        parts = [p.strip() for p in response_clean.split(",")]
+
+        # Extract language (first part)
+        language = parts[0] if parts else "unknown"
+
+        # Extract document type (second part, or try the whole response)
+        doc_type_raw = parts[1] if len(parts) > 1 else response_clean
+
+        # Check language — reject non-English before extraction
+        if "non_english" in language or (language != "english" and "english" not in language):
+            # Double check: maybe the LLM didn't follow the format.
+            # If we find a known doc type, it might still be English.
+            has_known_type = any(t in doc_type_raw for t in KNOWN_DOCUMENT_TYPES - {"unknown"})
+            if not has_known_type:
+                logger.warning("Document rejected: non-English (language=%s, model=%s)",
+                              language, model_name)
+                raise UnsupportedFileError(
+                    "This document appears to be in a non-English language. "
+                    "Currently only English documents are supported."
+                )
+
+        # Match document type to known types
         for known_type in KNOWN_DOCUMENT_TYPES:
-            if known_type in doc_type:
-                logger.info("Classified document as: %s (model: %s)", known_type, model_name)
+            if known_type in doc_type_raw:
+                logger.info("Classified: language=%s, type=%s (model=%s)",
+                           language, known_type, model_name)
                 return known_type
 
-        logger.warning("Unrecognized classification response: '%s', defaulting to 'unknown'",
+        logger.warning("Unrecognized classification: '%s', defaulting to 'unknown'",
                         response_text.strip())
         return "unknown"
 
+    except UnsupportedFileError:
+        raise  # Re-raise language rejection
     except Exception as e:
         logger.error("Document classification failed: %s", e)
         return "unknown"
@@ -406,10 +400,12 @@ def _extract_fields_from_images(
     )
 
     last_error = None
+    last_error_msg = ""
     raw_response = ""
     model_name = ""
 
-    # Attempt extraction with retries on JSON parse failure
+    # Attempt extraction with retries on parse/validation failure.
+    # Each retry includes the specific error message so the LLM can self-correct.
     for attempt in range(1 + max_retries):
         try:
             if attempt == 0:
@@ -418,10 +414,17 @@ def _extract_fields_from_images(
                     [message], trace_name="vision_extract"
                 )
             else:
-                # Retry: send the retry prompt + images again
-                logger.info("Extraction retry %d/%d (previous response was not valid JSON)",
-                            attempt, max_retries)
-                retry_content = [{"type": "text", "text": retry_prompt}]
+                # Retry: build a prompt that includes the specific error
+                logger.info("Extraction retry %d/%d — error: %s",
+                            attempt, max_retries, last_error_msg)
+
+                # Dynamic retry prompt with the actual error
+                error_specific_prompt = (
+                    f"Your previous response had an error: {last_error_msg}\n\n"
+                    f"{retry_prompt}"
+                )
+
+                retry_content = [{"type": "text", "text": error_specific_prompt}]
                 for img_bytes in image_bytes_list:
                     image_b64 = base64.b64encode(img_bytes).decode("utf-8")
                     retry_content.append({
@@ -435,14 +438,17 @@ def _extract_fields_from_images(
 
             raw_response = response_text
 
-            # Try to parse the JSON response
+            # Parse and validate the JSON response
             parsed = _parse_extraction_response(response_text)
             logger.info("Successfully parsed extraction response on attempt %d", attempt + 1)
             return parsed, model_name, raw_response
 
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
+            # JSONDecodeError: response isn't valid JSON
+            # ValueError: valid JSON but missing keys, wrong types, or empty fields
             last_error = e
-            logger.warning("JSON parse failed on attempt %d: %s", attempt + 1, e)
+            last_error_msg = str(e)
+            logger.warning("Parse/validation failed on attempt %d: %s", attempt + 1, e)
             continue
         except ExtractionError:
             raise
@@ -502,11 +508,24 @@ def _parse_extraction_response(response_text: str) -> dict:
         else:
             raise
 
-    # Ensure required keys exist with defaults
+    # Validate required keys — raise so retry can include the specific error
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
+
     if "fields" not in parsed:
-        parsed["fields"] = {}
+        raise ValueError("Missing required key 'fields' in response JSON")
+
+    if not isinstance(parsed.get("fields"), dict):
+        raise ValueError(f"'fields' must be a dict, got {type(parsed.get('fields')).__name__}")
+
     if "confidence_scores" not in parsed:
-        parsed["confidence_scores"] = {}
+        raise ValueError("Missing required key 'confidence_scores' in response JSON")
+
+    if not isinstance(parsed.get("confidence_scores"), dict):
+        raise ValueError(f"'confidence_scores' must be a dict, got {type(parsed.get('confidence_scores')).__name__}")
+
+    if not parsed["fields"]:
+        raise ValueError("'fields' is empty — no data was extracted from the document")
 
     return parsed
 
@@ -641,14 +660,20 @@ def extract_from_document(
             # For image files, use the raw bytes directly as a single "page"
             image_bytes_list = [file_bytes]
 
-        # Step 4: Classify document type (if no hint provided)
-        if document_type_hint and document_type_hint.lower() in KNOWN_DOCUMENT_TYPES:
-            document_type = document_type_hint.lower()
-            logger.info("Using provided document type hint: %s", document_type)
-        else:
-            logger.info("Classifying document type using vision LLM...")
-            document_type = _classify_document(image_bytes_list[0])
-            logger.info("Document classified as: %s", document_type)
+        # Step 4: Classify document type AND check language.
+        # Always run the classifier — it checks both language and type in one call.
+        # Non-English documents are rejected here before the expensive extraction.
+        logger.info("Classifying document language and type using vision LLM...")
+        document_type = _classify_document(image_bytes_list[0])
+        logger.info("Document classified as: %s", document_type)
+
+        # Reject unknown document types — we don't know what fields to extract.
+        # This catches non-logistics documents (selfies, screenshots, random files).
+        if document_type == "unknown":
+            raise UnsupportedFileError(
+                "Could not identify this as a supported logistics document. "
+                "Supported types: invoice, bill of lading, packing list, customs declaration."
+            )
 
         # Step 5: Extract fields using vision LLM
         logger.info("Extracting fields for document type: %s", document_type)
@@ -656,18 +681,7 @@ def extract_from_document(
             image_bytes_list, document_type
         )
 
-        # Step 6: Check language of the extracted text (if any)
-        fields_text = " ".join(
-            str(v) for v in parsed_response.get("fields", {}).values()
-            if v is not None
-        )
-        if fields_text and not _check_language(fields_text):
-            logger.warning("Document appears to be non-English, proceeding with caution")
-            # Don't reject outright, but add a note
-            existing_notes = parsed_response.get("notes", "")
-            parsed_response["notes"] = f"WARNING: Document may be non-English. {existing_notes}"
-
-        # Step 7: Build the ExtractionResult
+        # Step 6: Build the ExtractionResult
         result = _build_extraction_result(
             parsed_response, document_type, model_name, raw_response
         )

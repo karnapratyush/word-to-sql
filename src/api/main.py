@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.common.exceptions import GoCoMetAIError, GuardrailError, AllModelsFailedError, UnsupportedFileError
+from src.common.exceptions import  AIError, GuardrailError, AllModelsFailedError, UnsupportedFileError
 
 
 # ── Lifespan Manager ─────────────────────────────────────────────────
@@ -34,10 +34,11 @@ async def lifespan(app: FastAPI):
     from src.common.config_loader import load_settings
     load_settings()  # Will raise FileNotFoundError if config missing
 
-    # Rebuild the extracted_document_fields VIEW so the LLM can query
-    # extracted JSON fields as regular columns from application start.
-    from src.vision.storage import rebuild_view_on_startup
-    rebuild_view_on_startup(db_path=getattr(app.state, "db_path", None))
+    # Load all known JSON field names from extracted documents into memory.
+    # These field names are included in the schema description sent to the LLM,
+    # so it knows what json_extract() columns are available to query.
+    from src.vision.storage import init_known_fields
+    init_known_fields(db_path=getattr(app.state, "db_path", None))
 
     yield
     # Shutdown: close all thread-local SQLite connections
@@ -67,7 +68,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         Fully configured FastAPI app instance ready for uvicorn.run().
     """
     app = FastAPI(
-        title="GoComet AI Logistics API",
+        title="  AI Logistics API",
         description="Agentic analytics and document extraction for logistics data",
         version="1.0.0",
         lifespan=lifespan,
@@ -118,8 +119,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
             content={"error": "all_models_failed", "detail": str(exc), "task": exc.task},
         )
 
-    @app.exception_handler(GoCoMetAIError)
-    async def gocomet_error_handler(request: Request, exc: GoCoMetAIError):
+    @app.exception_handler( AIError)
+    async def  _error_handler(request: Request, exc:  AIError):
         """500 Internal Server Error — catch-all for domain errors."""
         return JSONResponse(
             status_code=500,

@@ -147,20 +147,16 @@ class SQLiteEngine:
     # ── Schema introspection ─────────────────────────────────────────
 
     def get_table_names(self) -> list[str]:
-        """Return user table and view names by querying sqlite_master.
-
-        Includes both tables AND views so that SQL VIEWs (like
-        extracted_document_fields) appear in schema descriptions
-        and are queryable by the LLM.
+        """Return user table names by querying sqlite_master.
 
         Excludes SQLite's internal tables (those starting with 'sqlite_').
 
         Returns:
-            Sorted list of table/view name strings.
+            Sorted list of table name strings.
         """
         rows = self.execute(
             "SELECT name FROM sqlite_master "
-            "WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' "
+            "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
             "ORDER BY name"
         )
         return [row["name"] for row in rows]

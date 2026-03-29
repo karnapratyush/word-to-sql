@@ -1,11 +1,11 @@
-"""Custom exception hierarchy for the GoCoMet AI application.
+"""Custom exception hierarchy for the   AI application.
 
-All domain-specific exceptions inherit from GoCoMetAIError so that
+All domain-specific exceptions inherit from  AIError so that
 API-level error handlers can catch them with a single except clause.
 Each exception type maps to a specific HTTP status code in the FastAPI
 exception handlers (see src/api/main.py):
 
-    GoCoMetAIError          → 500 Internal Server Error
+     AIError          → 500 Internal Server Error
     ├── AllModelsFailedError → 503 Service Unavailable
     ├── SQLGenerationError   → 500 (SQL pipeline failure)
     ├── SQLExecutionError    → 500 (query ran but errored)
@@ -15,15 +15,15 @@ exception handlers (see src/api/main.py):
 """
 
 
-class GoCoMetAIError(Exception):
-    """Base exception for all GoCoMet AI errors.
+class  AIError(Exception):
+    """Base exception for all   AI errors.
 
     Catching this single class in a handler covers every domain error.
     """
     pass
 
 
-class AllModelsFailedError(GoCoMetAIError):
+class AllModelsFailedError( AIError):
     """Every model in the fallback chain failed for a given task.
 
     Stores the task name and per-model error messages so the caller
@@ -41,7 +41,7 @@ class AllModelsFailedError(GoCoMetAIError):
         super().__init__(f"All models failed for task '{task}': {errors}")
 
 
-class SQLGenerationError(GoCoMetAIError):
+class SQLGenerationError( AIError):
     """SQL generation failed after all retries.
 
     Raised when the LLM could not produce valid SQL even after
@@ -50,7 +50,7 @@ class SQLGenerationError(GoCoMetAIError):
     pass
 
 
-class SQLExecutionError(GoCoMetAIError):
+class SQLExecutionError( AIError):
     """SQL executed but produced a database error.
 
     Raised when the generated SQL passed guardrail validation but
@@ -59,7 +59,7 @@ class SQLExecutionError(GoCoMetAIError):
     pass
 
 
-class ExtractionError(GoCoMetAIError):
+class ExtractionError( AIError):
     """Vision extraction failed.
 
     Raised when the vision LLM could not extract structured fields
@@ -68,7 +68,7 @@ class ExtractionError(GoCoMetAIError):
     pass
 
 
-class GuardrailError(GoCoMetAIError):
+class GuardrailError( AIError):
     """Input or output validation failed.
 
     Raised when either input guardrails (SQL injection, prompt injection,
@@ -78,7 +78,7 @@ class GuardrailError(GoCoMetAIError):
     pass
 
 
-class UnsupportedFileError(GoCoMetAIError):
+class UnsupportedFileError( AIError):
     """Uploaded file type is not supported.
 
     Raised when a user uploads a file format that the vision pipeline

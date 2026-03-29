@@ -362,13 +362,15 @@ FEW_SHOT_EXAMPLES = [
         "question": "Give me details about BL number BL-2024-KR-US-0841",
         "sql": (
             "SELECT document_type, overall_confidence, review_status, "
-            "bl_number, shipper_name, consignee_name, vessel_name, "
-            "port_of_loading, port_of_discharge, gross_weight "
-            "FROM extracted_document_fields "
-            "WHERE bl_number = 'BL-2024-KR-US-0841' "
+            "json_extract(extracted_fields, '$.bl_number') as bl_number, "
+            "json_extract(extracted_fields, '$.shipper_name') as shipper_name, "
+            "json_extract(extracted_fields, '$.consignee_name') as consignee_name, "
+            "json_extract(extracted_fields, '$.vessel_name') as vessel_name "
+            "FROM extracted_documents "
+            "WHERE json_extract(extracted_fields, '$.bl_number') = 'BL-2024-KR-US-0841' "
             "LIMIT 20"
         ),
-        "tables": ["extracted_document_fields"],
+        "tables": ["extracted_documents"],
         "complexity": "medium",
     },
     {
@@ -387,25 +389,27 @@ FEW_SHOT_EXAMPLES = [
         "id": "fs_extracted_invoice_amounts",
         "question": "What is the total amount from extracted invoices?",
         "sql": (
-            "SELECT invoice_number, total_amount, vendor_name "
-            "FROM extracted_document_fields "
+            "SELECT json_extract(extracted_fields, '$.invoice_number') as invoice_number, "
+            "json_extract(extracted_fields, '$.total_amount') as total_amount, "
+            "json_extract(extracted_fields, '$.vendor_name') as vendor_name "
+            "FROM extracted_documents "
             "WHERE document_type = 'invoice' "
             "LIMIT 20"
         ),
-        "tables": ["extracted_document_fields"],
+        "tables": ["extracted_documents"],
         "complexity": "medium",
     },
     {
         "id": "fs_extracted_linked_shipments",
         "question": "Which shipments have linked documents?",
         "sql": (
-            "SELECT s.shipment_id, s.status, s.mode, s.origin_country, s.destination_country, "
-            "edf.document_type, edf.overall_confidence, edf.review_status "
-            "FROM extracted_document_fields edf "
-            "JOIN shipments s ON edf.linked_shipment_id = s.shipment_id "
+            "SELECT s.shipment_id, s.status, s.mode, s.origin_country, "
+            "s.destination_country, e.document_type, e.overall_confidence "
+            "FROM extracted_documents e "
+            "JOIN shipments s ON e.linked_shipment_id = s.shipment_id "
             "LIMIT 20"
         ),
-        "tables": ["extracted_document_fields", "shipments"],
+        "tables": ["extracted_documents", "shipments"],
         "complexity": "medium",
     },
     {
@@ -413,11 +417,43 @@ FEW_SHOT_EXAMPLES = [
         "question": "Show documents with confidence below 0.8",
         "sql": (
             "SELECT document_type, file_name, overall_confidence, review_status "
-            "FROM extracted_document_fields "
+            "FROM extracted_documents "
             "WHERE overall_confidence < 0.8 "
             "ORDER BY overall_confidence ASC LIMIT 20"
         ),
-        "tables": ["extracted_document_fields"],
+        "tables": ["extracted_documents"],
         "complexity": "simple",
+    },
+    {
+        "id": "fs_extracted_compare_charges",
+        "question": "Compare the extracted invoice amount with actual shipment charges",
+        "sql": (
+            "SELECT json_extract(e.extracted_fields, '$.invoice_number') as invoice_number, "
+            "json_extract(e.extracted_fields, '$.total_amount') as extracted_amount, "
+            "s.shipment_id, "
+            "ROUND(SUM(sc.amount_usd), 2) as actual_charges "
+            "FROM extracted_documents e "
+            "JOIN shipments s ON e.linked_shipment_id = s.shipment_id "
+            "JOIN shipment_charges sc ON s.id = sc.shipment_id "
+            "WHERE e.document_type = 'invoice' "
+            "GROUP BY e.document_id, s.shipment_id "
+            "LIMIT 20"
+        ),
+        "tables": ["extracted_documents", "shipments", "shipment_charges"],
+        "complexity": "hard",
+    },
+    {
+        "id": "fs_extracted_tracking_for_docs",
+        "question": "Show tracking events for shipments that have linked documents",
+        "sql": (
+            "SELECT e.document_type, s.shipment_id, t.event_type, "
+            "t.event_timestamp, t.location "
+            "FROM extracted_documents e "
+            "JOIN shipments s ON e.linked_shipment_id = s.shipment_id "
+            "JOIN tracking_events t ON s.id = t.shipment_id "
+            "ORDER BY t.event_timestamp DESC LIMIT 20"
+        ),
+        "tables": ["extracted_documents", "shipments", "tracking_events"],
+        "complexity": "hard",
     },
 ]

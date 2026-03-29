@@ -26,7 +26,7 @@ import json
 
 # ── Page Configuration ───────────────────────────────────────────────
 st.set_page_config(
-    page_title="Analytics | GoComet AI",
+    page_title="Analytics |   AI",
     page_icon="📊",
     layout="wide",
 )
@@ -48,36 +48,43 @@ if "session_id" not in st.session_state:
 # ── Sidebar ──────────────────────────────────────────────────────────
 # Sample questions and conversation controls
 with st.sidebar:
-    st.subheader("Sample Questions")
+    st.subheader("Shipment Analytics")
 
-    samples = [
-        "How many shipments are currently delayed?",
-        "Average freight cost by carrier for ocean shipments",
-        "Top 5 routes by shipment volume",
-        "Which carriers have the highest delay rate?",
-        "Monthly shipment count trend",
+    shipment_samples = [
+        "How many shipments are delayed?",
+        "Average freight cost by carrier",
+        "Top 5 carriers by delay rate",
+        "Monthly shipment trend for 2024",
         "Compare ocean vs air shipping costs",
         "Most common delay reasons",
-        "Total invoice amount by payment status",
-        "Shipments from India to USA",
-        "Top 10 customers by total shipping cost",
     ]
 
-    # Each sample question is a button that sets a pending query
-    for sample in samples:
-        if st.button(sample, key=f"sample_{sample[:20]}", use_container_width=True):
+    for sample in shipment_samples:
+        if st.button(sample, key=f"sample_{sample[:25]}", use_container_width=True):
+            st.session_state.pending_query = sample
+
+    st.divider()
+    st.subheader("Extracted Documents")
+    st.caption("Query data from uploaded PDFs/images")
+
+    doc_samples = [
+        "Show all extracted documents",
+        "Give me details about BL number BL-2024-KR-US-0841",
+        "Which shipments have linked documents?",
+        "Show documents with confidence below 0.8",
+    ]
+
+    for sample in doc_samples:
+        if st.button(sample, key=f"doc_{sample[:25]}", use_container_width=True):
             st.session_state.pending_query = sample
 
     st.divider()
 
-    # Clear conversation button resets messages and generates a new session
-    if st.button("🗑️ Clear Conversation", use_container_width=True):
+    if st.button("Clear Conversation", use_container_width=True):
         st.session_state.messages = []
         st.session_state.session_id = __import__("uuid").uuid4().hex
         st.rerun()
 
-    st.divider()
-    # Display truncated session ID for debugging/tracking
     st.caption(f"Session: `{st.session_state.session_id[:8]}...`")
 
 # ── Chat History Display ─────────────────────────────────────────────

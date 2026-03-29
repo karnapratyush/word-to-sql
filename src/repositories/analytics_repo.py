@@ -127,12 +127,53 @@ class AnalyticsRepository(BaseRepository):
 
             parts.append(part)
 
-        # The extracted_document_fields VIEW (if it exists) will automatically
-        # appear in get_table_names() and get_schema_description() because
-        # SQLite treats views like tables for PRAGMA table_info().
-        # No special handling needed — the LLM sees it as a normal table.
+        # Append known JSON field names from extracted_documents.
+        # These come from the in-memory set maintained by vision/storage.py.
+        # The LLM needs to know these exist so it can write json_extract() queries.
+        json_fields_section = self._build_json_fields_section()
+        if json_fields_section:
+            parts.append(json_fields_section)
 
         return "\n\n".join(parts)
+
+    def _build_json_fields_section(self) -> str:
+        """Build a schema hint listing JSON field names inside extracted_documents.
+
+        Reads the known fields set from vision/storage.py and formats them
+        as a section in the schema description. This tells the LLM:
+        - What field names exist inside the extracted_fields JSON column
+        - How to query them using json_extract()
+
+        The LLM sees this and knows to write:
+            json_extract(extracted_fields, '$.bl_number')
+        instead of trying to find bl_number as a regular column.
+
+        Returns:
+            Multi-line string, or empty string if no fields are known.
+        """
+        try:
+            from src.vision.storage import get_known_fields
+            fields = get_known_fields()
+        except Exception:
+            fields = set()
+
+        if not fields:
+            return ""
+
+        lines = [
+            "EXTRACTED DOCUMENT JSON FIELDS (inside extracted_documents.extracted_fields):",
+            "  These fields are stored as JSON. Query them with json_extract():",
+            "    json_extract(extracted_fields, '$.FIELD_NAME')",
+            "  Available fields:",
+        ]
+        for field_name in sorted(fields):
+            lines.append(f"    - {field_name}")
+
+        lines.append("")
+        lines.append("  Example: SELECT json_extract(extracted_fields, '$.bl_number') as bl_number FROM extracted_documents")
+        lines.append("  Example: SELECT * FROM extracted_documents WHERE json_extract(extracted_fields, '$.bl_number') = 'BL-2024-XXX'")
+
+        return "\n".join(lines)
 
     def _build_extracted_fields_table(self) -> str:
         """Build a virtual table description showing extracted JSON fields as columns.

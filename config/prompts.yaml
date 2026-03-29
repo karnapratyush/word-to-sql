@@ -21,8 +21,16 @@ analytics:
     RULES:
     - "sql_query": the question can be answered by querying the database
     - "clarification": the question is ambiguous and needs more detail
-    - "unanswerable": the question asks about data that doesn't exist in our tables
+    - "unanswerable": the question asks about data that CLEARLY doesn't exist (weather, stock prices, employee salaries, etc.)
     - "general": greeting, thanks, or general chat (no data needed)
+
+    IMPORTANT: When in doubt, classify as "sql_query". It is MUCH better to
+    try a query and get empty results than to refuse a valid question.
+    The database has extracted_documents with JSON fields, shipments, carriers,
+    charges, invoices, and tracking events. If the question mentions ANY of
+    these concepts, classify as "sql_query" even if you're not sure the
+    specific data exists. Only use "unanswerable" for topics completely
+    outside logistics (weather, sports, news, etc.).
 
   sql_generator: |
     You are an expert SQL analyst for a logistics database running SQLite.
@@ -47,29 +55,38 @@ analytics:
     - Include ORDER BY for meaningful result ordering.
     - If it's a follow-up question, build on the previous query context.
 
-    IMPORTANT — EXTRACTED DOCUMENTS:
-    The database has a VIEW called "extracted_document_fields" that flattens
-    the JSON fields from extracted_documents into regular columns. This VIEW
-    is listed in the schema with all its column names.
+    IMPORTANT — TWO KINDS OF DATA:
+    This database has TWO separate data sources. You MUST pick the right one:
 
-    BEFORE writing SQL, check if the user's question mentions ANY column from
-    the extracted_document_fields VIEW (e.g., bl_number, shipper_name,
-    vessel_name, invoice_number, consignee_name, total_amount, etc.).
+    1. PRE-LOADED TABLES (shipments, carriers, customers, invoices, shipment_charges, tracking_events):
+       These contain 100K+ rows of structured logistics data loaded at setup.
+       Use these for general analytics questions.
 
-    If it does, query extracted_document_fields like a normal table:
-      SELECT bl_number, shipper_name, vessel_name
-      FROM extracted_document_fields
-      WHERE bl_number = 'BL-2024-XXX'
+    2. EXTRACTED DOCUMENTS (extracted_documents table):
+       These are documents uploaded by users via OCR/vision extraction.
+       Their fields are stored as JSON inside the "extracted_fields" column.
+       The schema lists available JSON field names under "EXTRACTED DOCUMENT JSON FIELDS".
 
-    If the question needs BOTH document fields AND shipment/carrier data, JOIN:
-      SELECT edf.bl_number, edf.vessel_name, edf.shipper_name,
+    HOW TO TELL WHICH TO USE:
+    - If the user says "extracted", "uploaded", "OCR", "scanned", or "document" → use extracted_documents
+    - If the user mentions field names from the JSON fields list (bl_number, vessel_name,
+      shipper_name, consignee_name, etc.) → use extracted_documents with json_extract()
+    - If the user asks about general shipment data, costs, delays → use the pre-loaded tables
+    - If the user wants to compare both → JOIN extracted_documents with shipments
+
+    QUERYING EXTRACTED DOCUMENTS:
+    Fields are inside the extracted_fields JSON column. Use json_extract():
+      SELECT json_extract(extracted_fields, '$.bl_number') as bl_number,
+             json_extract(extracted_fields, '$.shipper_name') as shipper
+      FROM extracted_documents
+      WHERE json_extract(extracted_fields, '$.bl_number') = 'BL-2024-XXX'
+
+    JOINING WITH SHIPMENTS:
+      SELECT json_extract(e.extracted_fields, '$.bl_number') as bl_number,
              s.status, s.mode, c.carrier_name
-      FROM extracted_document_fields edf
-      JOIN shipments s ON edf.linked_shipment_id = s.shipment_id
+      FROM extracted_documents e
+      JOIN shipments s ON e.linked_shipment_id = s.shipment_id
       JOIN carriers c ON s.carrier_id = c.id
-
-    These columns do NOT exist in shipments, carriers, or invoices tables.
-    They ONLY exist in extracted_document_fields.
 
     Respond ONLY with valid JSON (no markdown):
     {{"sql": "your SELECT query here",
@@ -128,16 +145,20 @@ analytics:
 
 vision:
   classifier: |
-    Look at this document image. What type of logistics/shipping document is this?
+    Look at this document image and answer two things:
+    1. What language is the document written in?
+    2. What type of logistics/shipping document is this?
 
-    Respond with ONLY ONE of these types:
-    - invoice
-    - bill_of_lading
-    - packing_list
-    - customs_declaration
-    - unknown
+    Respond with ONLY two words separated by a comma:
+    <language>,<document_type>
 
-    Just the type, nothing else.
+    Language must be one of: english, non_english
+    Document type must be one of: invoice, bill_of_lading, packing_list, customs_declaration, unknown
+
+    Examples:
+    english,invoice
+    english,bill_of_lading
+    non_english,unknown
 
   extractor: |
     You are a logistics document extraction specialist. Extract all relevant
@@ -159,10 +180,20 @@ vision:
       "notes": "any issues, ambiguities, or important observations"}}
 
   extractor_retry: |
-    Your previous response was not valid JSON.
-    Please try again. Extract fields from this document.
-    Respond with ONLY a JSON object — no markdown backticks, no explanation text.
-    {{"fields": {{}}, "confidence_scores": {{}}, "document_type": "...", "notes": "..."}}
+    Please try again. Extract ALL visible fields from this document.
+
+    REQUIREMENTS:
+    - Respond with ONLY a valid JSON object — no markdown, no explanation text
+    - The JSON MUST have these keys: "fields", "confidence_scores", "document_type", "notes"
+    - "fields" must be a non-empty dict with field_name: value pairs
+    - "confidence_scores" must be a dict with field_name: float (0.0 to 1.0) for EVERY field
+    - Do NOT return empty fields — extract at least the main identifiers visible in the document
+
+    Correct format:
+    {"fields": {"field_name_1": "extracted value", "field_name_2": "extracted value"},
+      "confidence_scores": {"field_name_1": 0.95, "field_name_2": 0.88},
+      "document_type": "the document type you detected",
+      "notes": "any issues or observations"}
 
 document_types:
   invoice:
