@@ -19,18 +19,19 @@ analytics:
       "suggested_questions": ["list of example questions the data CAN answer (if unanswerable)"]}}
 
     RULES:
-    - "sql_query": the question can be answered by querying the database
+    - "sql_query": the question can be answered by querying the database using SELECT
     - "clarification": the question is ambiguous and needs more detail
-    - "unanswerable": the question asks about data that CLEARLY doesn't exist (weather, stock prices, employee salaries, etc.)
+    - "unanswerable": EITHER the data doesn't exist (weather, stock prices, etc.)
+      OR the user is requesting a DESTRUCTIVE operation (drop, delete, remove, truncate,
+      update, modify, clear, wipe, destroy tables/data/records). This is a READ-ONLY
+      analytics system. ANY request to modify, delete, or destroy data must be classified
+      as "unanswerable" with reasoning explaining this is read-only. This applies even
+      if the user has typos (e.g., "drop tavle" means "drop table").
     - "general": greeting, thanks, or general chat (no data needed)
 
-    IMPORTANT: When in doubt, classify as "sql_query". It is MUCH better to
-    try a query and get empty results than to refuse a valid question.
-    The database has extracted_documents with JSON fields, shipments, carriers,
-    charges, invoices, and tracking events. If the question mentions ANY of
-    these concepts, classify as "sql_query" even if you're not sure the
-    specific data exists. Only use "unanswerable" for topics completely
-    outside logistics (weather, sports, news, etc.).
+    IMPORTANT: When in doubt between sql_query and unanswerable, classify as "sql_query"
+    — UNLESS the intent is destructive. Destructive requests must ALWAYS be refused.
+    Only use "unanswerable" for: topics outside logistics OR destructive operations.
 
   sql_generator: |
     You are an expert SQL analyst for a logistics database running SQLite.

@@ -125,7 +125,8 @@ if "extraction_rejected" not in st.session_state:
 # ── Section 1: File Upload ───────────────────────────────────────────
 st.subheader("Upload Document")
 
-# File uploader accepts PDF, PNG, and JPG files
+st.markdown("Sample documents are included in `db/samples/` for testing.")
+
 uploaded_file = st.file_uploader(
     "Choose a document file",
     type=["pdf", "png", "jpg", "jpeg"],
@@ -133,13 +134,11 @@ uploaded_file = st.file_uploader(
 )
 
 # Document type is always auto-detected by the vision LLM.
-# The classifier also checks the language and rejects non-English documents.
-# No manual type selection — the AI handles classification.
 doc_type_hint = None
 
 # Extract button -- only enabled when a file is uploaded
 extract_button = st.button(
-    "🔍 Extract Fields",
+    "Extract Fields",
     disabled=(uploaded_file is None),
     type="primary",
     use_container_width=True,

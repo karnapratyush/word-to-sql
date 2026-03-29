@@ -27,17 +27,27 @@ from src.common.config_loader import load_settings
 # Each pattern requires the keyword at the START of a statement or after
 # a semicolon, so natural language like "I want to update my query" passes.
 _SQL_INJECTION_PATTERNS = [
-    re.compile(r"(?:^|;\s*)DROP\s+TABLE\b", re.IGNORECASE),        # DROP TABLE attacks
-    re.compile(r"(?:^|;\s*)DELETE\s+FROM\b", re.IGNORECASE),        # DELETE FROM attacks
-    re.compile(r"(?:^|;\s*)INSERT\s+INTO\b", re.IGNORECASE),        # INSERT INTO attacks
-    re.compile(r"(?:^|;\s*)UPDATE\s+\w+\s+SET\b", re.IGNORECASE),   # UPDATE ... SET attacks
-    re.compile(r"(?:^|;\s*)ALTER\s+TABLE\b", re.IGNORECASE),        # Schema modification
-    re.compile(r"(?:^|;\s*)TRUNCATE\s+TABLE\b", re.IGNORECASE),     # Table truncation
-    re.compile(r"(?:^|;\s*)GRANT\b", re.IGNORECASE),                # Permission escalation
-    re.compile(r"(?:^|;\s*)REVOKE\b", re.IGNORECASE),               # Permission removal
-    re.compile(r"UNION\s+SELECT\b", re.IGNORECASE),                 # UNION-based injection
-    re.compile(r";\s*--", re.IGNORECASE),                           # Comment after semicolon (SQL injection signature)
-    re.compile(r";\s*DROP\b", re.IGNORECASE),                       # Chained DROP after semicolon
+    # SQL syntax patterns (exact SQL commands)
+    re.compile(r"(?:^|;\s*)DROP\s+TABLE\b", re.IGNORECASE),
+    re.compile(r"(?:^|;\s*)DELETE\s+FROM\b", re.IGNORECASE),
+    re.compile(r"(?:^|;\s*)INSERT\s+INTO\b", re.IGNORECASE),
+    re.compile(r"(?:^|;\s*)UPDATE\s+\w+\s+SET\b", re.IGNORECASE),
+    re.compile(r"(?:^|;\s*)ALTER\s+TABLE\b", re.IGNORECASE),
+    re.compile(r"(?:^|;\s*)TRUNCATE\s+TABLE\b", re.IGNORECASE),
+    re.compile(r"(?:^|;\s*)GRANT\b", re.IGNORECASE),
+    re.compile(r"(?:^|;\s*)REVOKE\b", re.IGNORECASE),
+    re.compile(r"UNION\s+SELECT\b", re.IGNORECASE),
+    re.compile(r";\s*--", re.IGNORECASE),
+    re.compile(r";\s*DROP\b", re.IGNORECASE),
+]
+
+# Natural language patterns requesting destructive operations.
+# Users may not write SQL but say "drop the table" or "delete all data".
+# This is a READ-ONLY analytics system — any modification request should be refused.
+_DESTRUCTIVE_INTENT_PATTERNS = [
+    re.compile(r"\b(drop|delete|remove|destroy|erase|wipe|clear|truncate|purge)\b.*\b(table|data|database|records|rows|everything|all)\b", re.IGNORECASE),
+    re.compile(r"\b(table|data|database|records|rows)\b.*\b(drop|delete|remove|destroy|erase|wipe|clear|truncate|purge)\b", re.IGNORECASE),
+    re.compile(r"\b(modify|change|update|alter|edit)\b.*\b(schema|table|column|structure)\b", re.IGNORECASE),
 ]
 
 
@@ -138,7 +148,20 @@ def validate_input(user_input: str) -> GuardrailResult:
             blocked_patterns=blocked,
         )
 
-    # ── Check 6: Prompt injection detection ──────────────────────────
+    # ── Check 6: Destructive intent detection ─────────────────────────
+    # Catches natural language requests to modify/delete data.
+    # "drop the table", "delete all data", "remove everything", etc.
+    # This is a READ-ONLY system — all modification requests are refused.
+    for pattern in _DESTRUCTIVE_INTENT_PATTERNS:
+        if pattern.search(stripped):
+            return GuardrailResult(
+                passed=False,
+                reason="This is a read-only analytics system. Data modification (drop, delete, update) is not supported.",
+                sanitized_input=None,
+                blocked_patterns=[pattern.pattern],
+            )
+
+    # ── Check 7: Prompt injection detection ──────────────────────────
     prompt_patterns = _load_prompt_injection_patterns()
     for pattern in prompt_patterns:
         if pattern.search(stripped):
