@@ -18,6 +18,23 @@ from pydantic import BaseModel
 from typing import Optional
 
 
+# ── Compare Request (Phase 2 of two-phase flow) ──────────────────────────
+
+class CompareDocumentInput(BaseModel):
+    """A single document's confirmed fields for comparison."""
+    file_name: str = ""
+    document_type: str = ""
+    document_id: Optional[str] = None
+    extracted_fields: dict = {}
+    confidence_scores: dict = {}
+
+class CompareConfirmedRequest(BaseModel):
+    """Request body for POST /api/verification/compare."""
+    customer_id: str
+    shipment_ref: Optional[str] = None
+    documents: list[CompareDocumentInput] = []
+
+
 # ── Field Comparison (nested in responses) ──────────────────────────────
 
 class FieldComparisonResponse(BaseModel):

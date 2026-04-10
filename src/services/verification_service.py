@@ -167,7 +167,6 @@ class VerificationService:
                     "confidence": c.confidence,
                     "rule_type": c.rule_type,
                     "rule_violated": c.rule_violated,
-                    "_source_doc": doc.get("file_name", "unknown"),
                 })
 
         # Convert dicts to FieldComparison objects for determine_overall_status and generate_draft
@@ -209,8 +208,8 @@ class VerificationService:
         # Check if a previous verification exists for this shipment + document type.
         # If so, mark the old one as superseded and record version info in notes.
         version_notes = ""
+        repo = VerificationRepository(db_path=self._db_path)
         try:
-            repo = VerificationRepository(db_path=self._db_path)
             if shipment_ref and doc_type:
                 existing = repo.get_verifications_by_shipment(shipment_ref)
                 for prev in existing:
@@ -235,7 +234,6 @@ class VerificationService:
             logger.warning("Failed to check/supersede previous verifications: %s", e)
 
         try:
-            repo = VerificationRepository(db_path=self._db_path)
             repo.insert_verification_result(
                 verification_id=verification_id,
                 document_id=doc_id,

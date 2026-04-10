@@ -34,10 +34,11 @@ Error handling:
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from src.api.dependencies import get_verification_service
 from src.api.schemas.verification import (
+    CompareConfirmedRequest,
     CustomerResponse,
     FieldComparisonResponse,
     VerificationDetailResponse,
@@ -148,7 +149,7 @@ async def process_document(
 
 @router.post("/compare", response_model=VerificationProcessResponse)
 async def compare_confirmed_fields(
-    request: dict = Body(...),
+    request: CompareConfirmedRequest,
     service: VerificationService = Depends(get_verification_service),
 ):
     """Compare pre-confirmed extracted fields against customer rules.
@@ -176,9 +177,9 @@ async def compare_confirmed_fields(
 
     try:
         result = service.compare_confirmed(
-            customer_id=request["customer_id"],
-            shipment_ref=request.get("shipment_ref"),
-            documents=request["documents"],
+            customer_id=request.customer_id,
+            shipment_ref=request.shipment_ref,
+            documents=[doc.model_dump() for doc in request.documents],
         )
 
         comparisons = [

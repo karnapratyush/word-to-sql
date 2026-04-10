@@ -663,18 +663,31 @@ if st.session_state.verification_result is not None:
                     except Exception as e:
                         st.error(f"Failed to submit review: {e}")
 
-            # Handle override
+            # Handle override — use session_state to persist the override flow
+            # across Streamlit reruns (buttons lose state between reruns).
+            if "show_override" not in st.session_state:
+                st.session_state.show_override = False
+
             if override_btn and reviewer_name:
-                # Show a dropdown to select the new status
+                st.session_state.show_override = True
+                st.rerun()
+
+            if st.session_state.show_override:
                 new_status = st.selectbox(
                     "Select new status",
                     ["approved", "amendment_required", "uncertain"],
                     key="override_status",
                 )
-                confirm_override = st.button(
-                    "Confirm Override",
-                    key="confirm_override",
-                )
+                col_confirm, col_cancel = st.columns(2)
+                with col_confirm:
+                    confirm_override = st.button("Confirm Override", key="confirm_override")
+                with col_cancel:
+                    cancel_override = st.button("Cancel", key="cancel_override")
+
+                if cancel_override:
+                    st.session_state.show_override = False
+                    st.rerun()
+
                 if confirm_override:
                     with st.spinner("Submitting override..."):
                         try:
@@ -684,13 +697,14 @@ if st.session_state.verification_result is not None:
                             client.review_verification(
                                 verification_id=result["verification_id"],
                                 reviewed_by=reviewer_name,
-                                notes=f"Status overridden. {review_notes}".strip(),
+                                notes=f"Status overridden to {new_status}. {review_notes}".strip(),
                                 overall_status=new_status,
                                 draft_reply=edited_draft if edited_draft != draft else None,
                             )
 
                             st.session_state.verification_reviewed = True
                             st.session_state.verification_result = None
+                            st.session_state.show_override = False
                             st.rerun()
 
                         except Exception as e:

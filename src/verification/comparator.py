@@ -87,17 +87,21 @@ class FieldComparison:
 def _match_exact(extracted: str, rule: dict) -> tuple[bool, str, Optional[str]]:
     """Check if extracted value exactly matches the expected value (case-insensitive).
 
+    Both extracted and expected values are normalized before comparison to avoid
+    false mismatches from formatting differences ($, commas, abbreviations).
+
     Args:
-        extracted: The extracted value as a string.
+        extracted: The extracted (already normalized) value as a string.
         rule: Rule dict with key "expected" containing the expected string.
 
     Returns:
         Tuple of (is_match, expected_display_value, violation_message_or_None).
     """
-    expected = str(rule.get("expected", ""))
-    is_match = extracted.strip().lower() == expected.strip().lower()
-    violation = None if is_match else f"Expected exact match '{expected}', got '{extracted}'"
-    return is_match, expected, violation
+    expected_raw = str(rule.get("expected", ""))
+    expected_norm = _normalize_value(expected_raw)
+    is_match = extracted.strip().lower() == expected_norm.strip().lower()
+    violation = None if is_match else f"Expected exact match '{expected_raw}', got '{extracted}'"
+    return is_match, expected_raw, violation
 
 
 def _match_prefix(extracted: str, rule: dict) -> tuple[bool, str, Optional[str]]:
@@ -130,9 +134,9 @@ def _match_one_of(extracted: str, rule: dict) -> tuple[bool, str, Optional[str]]
     if not isinstance(allowed, list):
         allowed = [allowed]
 
-    # Case-insensitive comparison against each allowed value
+    # Normalize both sides for comparison (handles formatting differences)
     extracted_lower = extracted.strip().lower()
-    is_match = any(extracted_lower == str(a).strip().lower() for a in allowed)
+    is_match = any(extracted_lower == _normalize_value(str(a)).strip().lower() for a in allowed)
 
     expected_display = f"one of {allowed}"
     violation = None if is_match else f"Expected one of {allowed}, got '{extracted}'"
