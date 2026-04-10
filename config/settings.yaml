@@ -38,6 +38,11 @@ analytics:
   default_row_limit: 100
   full_scan_row_threshold: 1000    # Block full table scans on tables with more rows than this. Set low (1K) for POC demo. Production: 1000000
 
+verification:
+  confidence_threshold: 0.7
+  polling_interval_seconds: 2
+  inbox_directory: "db/inbox"
+
 database:
   path: "db/logistics.db"
   wal_mode: true

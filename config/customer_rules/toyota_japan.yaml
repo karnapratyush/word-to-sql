@@ -1,0 +1,40 @@
+# Customer rules for Toyota Motor Corporation (Japan).
+# Stricter rules for automotive parts — HS codes must be exact prefix,
+# ports restricted to Japanese ports only.
+
+customer_id: "TOYOTA-JP"
+customer_name: "Toyota Motor Corporation"
+
+rules:
+  consignee_name:
+    expected: "Toyota Motor Corporation, Nagoya"
+    match_type: exact
+
+  hs_code:
+    expected_prefix: "8703"
+    match_type: prefix
+
+  port_of_discharge:
+    expected: ["Port of Nagoya", "Port of Yokohama", "Port of Kobe"]
+    match_type: one_of
+
+  port_of_loading:
+    expected: ["Nhava Sheva (JNPT)", "Mundra Port", "Chennai Port", "Port of Shanghai", "Shenzhen Port"]
+    match_type: one_of
+
+  gross_weight:
+    max_deviation_percent: 3
+    reference_value: 12000
+    match_type: tolerance
+
+  currency:
+    expected: "USD"
+    match_type: exact
+
+  incoterm:
+    expected: ["FOB", "CIF"]
+    match_type: one_of
+
+  description_of_goods:
+    expected_contains: ["automotive", "vehicle", "parts", "components"]
+    match_type: contains_any

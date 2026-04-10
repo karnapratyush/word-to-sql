@@ -215,6 +215,134 @@ class APIClient:
             resp.raise_for_status()
             return resp.json()
 
+    # ── Verification Endpoints ──────────────────────────────────────
+
+    def verify_document(
+        self,
+        file_bytes: bytes,
+        file_name: str,
+        customer_id: str,
+        shipment_ref: Optional[str] = None,
+        doc_type_hint: Optional[str] = None,
+    ) -> dict:
+        """POST /api/verification/process — Upload and verify a document.
+
+        Uploads a document and runs the full verification pipeline:
+        extract fields, compare against customer rules, generate draft email.
+
+        Args:
+            file_bytes: Raw bytes of the uploaded file.
+            file_name: Original filename.
+            customer_id: Customer ID matching a YAML rules file.
+            shipment_ref: Optional shipment reference number.
+            doc_type_hint: Optional document type hint.
+
+        Returns:
+            Dict with verification outcome (comparisons, draft, status).
+        """
+        with self._client() as client:
+            files = {"file": (file_name, file_bytes)}
+            data = {"customer_id": customer_id}
+            if shipment_ref:
+                data["shipment_ref"] = shipment_ref
+            if doc_type_hint:
+                data["doc_type_hint"] = doc_type_hint
+            resp = client.post("/verification/process", files=files, data=data)
+            resp.raise_for_status()
+            return resp.json()
+
+    def list_verifications(
+        self,
+        status: Optional[str] = None,
+        customer: Optional[str] = None,
+    ) -> list[dict]:
+        """GET /api/verification — List all verification results.
+
+        Args:
+            status: Optional overall_status filter.
+            customer: Optional customer_id filter.
+
+        Returns:
+            List of verification result dicts.
+        """
+        with self._client() as client:
+            params = {}
+            if status:
+                params["status"] = status
+            if customer:
+                params["customer"] = customer
+            resp = client.get("/verification", params=params)
+            resp.raise_for_status()
+            return resp.json()
+
+    def get_verification(self, verification_id: str) -> dict:
+        """GET /api/verification/{id} — Get verification detail.
+
+        Args:
+            verification_id: UUID of the verification to retrieve.
+
+        Returns:
+            Dict with verification result and field comparison details.
+        """
+        with self._client() as client:
+            resp = client.get(f"/verification/{verification_id}")
+            resp.raise_for_status()
+            return resp.json()
+
+    def review_verification(
+        self,
+        verification_id: str,
+        reviewed_by: str,
+        notes: Optional[str] = None,
+        overall_status: Optional[str] = None,
+        draft_reply: Optional[str] = None,
+    ) -> dict:
+        """PUT /api/verification/{id}/review — Submit human review.
+
+        Args:
+            verification_id: UUID of the verification to review.
+            reviewed_by: Name/email of the reviewer.
+            notes: Optional review notes.
+            overall_status: Optional status override.
+            draft_reply: Optional updated draft email.
+
+        Returns:
+            Dict with updated verification result.
+        """
+        with self._client() as client:
+            body = {"reviewed_by": reviewed_by}
+            if notes is not None:
+                body["notes"] = notes
+            if overall_status is not None:
+                body["overall_status"] = overall_status
+            if draft_reply is not None:
+                body["draft_reply"] = draft_reply
+            resp = client.put(f"/verification/{verification_id}/review", json=body)
+            resp.raise_for_status()
+            return resp.json()
+
+    def get_verification_stats(self) -> dict:
+        """GET /api/verification/stats — Get verification statistics.
+
+        Returns:
+            Dict with total, by_status, reviewed, pending_review counts.
+        """
+        with self._client() as client:
+            resp = client.get("/verification/stats")
+            resp.raise_for_status()
+            return resp.json()
+
+    def list_verification_customers(self) -> list[dict]:
+        """GET /api/verification/customers — List customers with rules.
+
+        Returns:
+            List of dicts with customer_id, customer_name, rule_count.
+        """
+        with self._client() as client:
+            resp = client.get("/verification/customers")
+            resp.raise_for_status()
+            return resp.json()
+
 
 # ── Singleton ────────────────────────────────────────────────────────
 # Shared client instance for Streamlit (cached across page reruns).

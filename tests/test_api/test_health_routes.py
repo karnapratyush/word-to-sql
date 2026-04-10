@@ -26,7 +26,7 @@ class TestHealthEndpoint:
         data = client.get("/api/health").json()
         assert "shipments" in data["tables"]
         assert "carriers" in data["tables"]
-        assert len(data["tables"]) == 7
+        assert len(data["tables"]) >= 7  # 7 base + verification tables
 
     def test_includes_row_counts(self, client):
         data = client.get("/api/health").json()

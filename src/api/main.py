@@ -129,9 +129,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     # ── Register Routers ─────────────────────────────────────────
     # Import routers inside the function to avoid circular imports
-    from src.api.routers import health, analytics, documents
+    from src.api.routers import health, analytics, documents, verification
     app.include_router(health.router, prefix="/api", tags=["health"])
     app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
     app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
+    app.include_router(verification.router, prefix="/api/verification", tags=["verification"])
 
     return app
