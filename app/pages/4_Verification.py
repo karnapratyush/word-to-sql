@@ -190,193 +190,143 @@ uploaded_files = st.file_uploader(
     help="Upload one or more documents for the same shipment. Each will be verified independently against the customer's rules.",
 )
 
-# Verify button
-verify_button = st.button(
-    "Verify All Documents",
+# ── Session state for two-phase flow ────────────────────────────────
+if "extraction_results" not in st.session_state:
+    st.session_state.extraction_results = []  # Phase 1 results
+if "verification_results_batch" not in st.session_state:
+    st.session_state.verification_results_batch = []  # Phase 2 results
+if "phase" not in st.session_state:
+    st.session_state.phase = "upload"  # upload → review → verify → results
+
+# ── PHASE 1: Extract ────────────────────────────────────────────────
+extract_button = st.button(
+    "Step 1: Extract Fields",
     disabled=(len(uploaded_files) == 0),
     type="primary",
     use_container_width=True,
 )
 
-# ── Handle Verification ─────────────────────────────────────────────
-# Process each uploaded file independently against the same customer rules.
-# Results are collected and shown together.
+if extract_button and not shipment_ref.strip():
+    st.warning("Shipment Reference is required.")
+    extract_button = False
 
-# Validate shipment_ref is provided before proceeding
-if verify_button and not shipment_ref.strip():
-    st.warning("Shipment Reference is required. Please enter a shipment reference before verifying.")
-    verify_button = False  # Block the verification
-
-if verify_button and len(uploaded_files) > 0:
-    # Reset previous state
-    st.session_state.verification_result = None
+if extract_button and len(uploaded_files) > 0:
+    st.session_state.extraction_results = []
     st.session_state.verification_results_batch = []
-    st.session_state.verification_reviewed = False
-    st.session_state.selected_verification_id = None
+    st.session_state.verification_result = None
+    st.session_state.phase = "review"
 
     from app.api_client import get_api_client
     client = get_api_client()
 
-    results = []
-    progress = st.progress(0, text="Verifying documents...")
+    extractions = []
+    progress = st.progress(0, text="Extracting fields...")
 
     for i, uploaded_file in enumerate(uploaded_files):
-        progress.progress(
-            (i) / len(uploaded_files),
-            text=f"Verifying {uploaded_file.name} ({i+1}/{len(uploaded_files)})..."
-        )
+        progress.progress(i / len(uploaded_files),
+                         text=f"Extracting {uploaded_file.name} ({i+1}/{len(uploaded_files)})...")
         try:
-            file_bytes = uploaded_file.getvalue()
-            file_name = uploaded_file.name
-
-            result = client.verify_document(
-                file_bytes=file_bytes,
-                file_name=file_name,
-                customer_id=selected_customer_id,
-                shipment_ref=shipment_ref if shipment_ref else None,
+            result = client.upload_document(
+                file_bytes=uploaded_file.getvalue(),
+                file_name=uploaded_file.name,
             )
-            result["_file_name"] = file_name
-            results.append(result)
-
+            result["_file_name"] = uploaded_file.name
+            extractions.append(result)
         except Exception as e:
-            results.append({
-                "_file_name": file_name,
-                "overall_status": "extraction_failed",
+            extractions.append({
+                "_file_name": uploaded_file.name,
                 "error": str(e),
-                "fields": [],
+                "fields": {},
+                "confidence_scores": {},
+                "document_type": "unknown",
             })
 
-    progress.progress(1.0, text=f"Done — {len(results)} document(s) verified")
-
-    # Store results — single doc goes to verification_result, batch to list
-    if len(results) == 1:
-        st.session_state.verification_result = results[0]
-    st.session_state.verification_results_batch = results
+    progress.progress(1.0, text=f"Extracted {len(extractions)} document(s)")
+    st.session_state.extraction_results = extractions
     st.rerun()
 
+# ── PHASE 2: Review Extracted Fields ────────────────────────────────
+if st.session_state.extraction_results and st.session_state.phase == "review":
+    st.divider()
+    st.subheader("Step 2: Review Extracted Fields")
+    st.markdown("Review the fields extracted from each document. Edit any incorrect values before verification.")
+
+    edited_documents = []
+
+    for idx, extraction in enumerate(st.session_state.extraction_results):
+        file_name = extraction.get("_file_name", f"Document {idx+1}")
+        doc_type = extraction.get("document_type", "unknown")
+        fields = extraction.get("fields", {})
+        scores = extraction.get("confidence_scores", {})
+        needs_review = extraction.get("needs_review", {})
+        error = extraction.get("error")
+
+        with st.expander(f"{file_name} ({doc_type.replace('_', ' ').title()})", expanded=True):
+            if error:
+                st.error(f"Extraction failed: {error}")
+                continue
+
+            st.caption(f"Overall confidence: {extraction.get('overall_confidence', 0) * 100:.0f}% | Model: {extraction.get('model_used', 'N/A')}")
+
+            edited_fields = {}
+            for field_name, value in fields.items():
+                conf = scores.get(field_name, 0)
+                review_flag = needs_review.get(field_name, False)
+                icon = get_confidence_icon(conf)
+                label = f"{icon} {field_name.replace('_', ' ').title()} ({conf*100:.0f}%)"
+                if review_flag:
+                    label += " — needs review"
+
+                display_val = str(value) if value is not None else ""
+                if isinstance(value, (list, dict)):
+                    display_val = str(value)
+
+                edited_val = st.text_input(
+                    label,
+                    value=display_val,
+                    key=f"edit_{idx}_{field_name}",
+                )
+                edited_fields[field_name] = edited_val
+
+            edited_documents.append({
+                "file_name": file_name,
+                "document_type": doc_type,
+                "extracted_fields": edited_fields,
+                "confidence_scores": scores,
+            })
+
+    st.divider()
+
+    # Confirm and verify button
+    verify_button = st.button(
+        "Step 3: Confirm & Verify Against Customer Rules",
+        type="primary",
+        use_container_width=True,
+    )
+
+    if verify_button:
+        st.session_state.phase = "verify"
+        from app.api_client import get_api_client
+        client = get_api_client()
+
+        with st.spinner("Comparing against customer rules..."):
+            try:
+                result = client.compare_confirmed_fields(
+                    customer_id=selected_customer_id,
+                    shipment_ref=shipment_ref,
+                    documents=edited_documents,
+                )
+                st.session_state.verification_result = result
+                st.session_state.verification_results_batch = [result]
+                st.session_state.phase = "results"
+                st.rerun()
+            except Exception as e:
+                st.error(f"Verification failed: {e}")
 
 # ── Show Review Success Message ──────────────────────────────────────
 if st.session_state.verification_reviewed:
     st.success("Review submitted successfully!")
     st.session_state.verification_reviewed = False
-
-# ── Batch Results Summary ───────────────────────────────────────────
-# When multiple files were uploaded, show a summary table first.
-# CG can click on a row to see the detailed field-by-field view.
-if "verification_results_batch" not in st.session_state:
-    st.session_state.verification_results_batch = []
-
-batch = st.session_state.verification_results_batch
-if batch and len(batch) > 1:
-    st.subheader(f"Batch Verification — {len(batch)} Documents")
-    if shipment_ref:
-        st.caption(f"Shipment: {shipment_ref}")
-
-    summary_data = []
-    for r in batch:
-        status = r.get("overall_status", "unknown")
-        badge = get_status_badge(status)
-        label = get_status_label(status)
-        # The process endpoint returns "comparisons", detail endpoint returns "fields"
-        fields_list = r.get("comparisons", r.get("fields", []))
-        n_fields = len(fields_list)
-        mismatches = sum(1 for f in fields_list if f.get("status") == "mismatch")
-        uncertain = sum(1 for f in fields_list if f.get("status") == "uncertain")
-        summary_data.append({
-            "Document": r.get("_file_name", "unknown"),
-            "Status": f"{badge} {label}",
-            "Fields": n_fields,
-            "Mismatches": mismatches,
-            "Uncertain": uncertain,
-        })
-
-    st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
-
-    # ── Unified Field View ──────────────────────────────────────────
-    # Merge all fields from all documents into one table so the CG can
-    # see all extracted fields side by side, grouped by field name.
-    st.subheader("Unified Field View")
-    st.caption(
-        "All fields from all documents merged into a single table. "
-        "Same fields from different documents are shown adjacent for comparison."
-    )
-
-    unified_data = []
-    for result in batch:
-        doc_name = result.get("_file_name", "unknown")
-        comparisons = result.get("comparisons", [])
-        for field in comparisons:
-            unified_data.append({
-                "Field": field.get("field_name", "").replace("_", " ").title(),
-                "Value": field.get("extracted_value", ""),
-                "Source": doc_name,
-                "Status": f"{get_status_badge(field.get('status', 'no_rule'))} {get_status_label(field.get('status', 'no_rule'))}",
-                "Confidence": f"{field.get('confidence', 0) * 100:.0f}%",
-                "Expected": field.get("expected_value") or "\u2014",
-            })
-
-    if unified_data:
-        # Sort by field name so same fields from different docs are adjacent
-        unified_df = pd.DataFrame(unified_data).sort_values("Field")
-        st.dataframe(unified_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("No field comparison data available.")
-
-    # ── Cross-Document Consistency Warnings ─────────────────────────
-    # Group fields by name and check if all values match across documents.
-    # Uses normalized values to avoid false positives from formatting.
-    field_groups = {}
-    for result in batch:
-        doc_name = result.get("_file_name", "unknown")
-        for field in result.get("comparisons", []):
-            fname = field.get("field_name", "")
-            if fname not in field_groups:
-                field_groups[fname] = {}
-            # Prefer normalized value for consistency check; fall back to raw
-            norm_val = field.get("extracted_normalized") or field.get("extracted_value") or ""
-            field_groups[fname][doc_name] = {
-                "raw": field.get("extracted_value", ""),
-                "normalized": norm_val,
-            }
-
-    # Check for inconsistencies (same field, different normalized values)
-    inconsistent_fields = []
-    for fname, doc_vals in field_groups.items():
-        if len(doc_vals) < 2:
-            continue
-        unique_normalized = set(
-            v["normalized"].strip().lower()
-            for v in doc_vals.values()
-            if v["normalized"].strip()
-        )
-        if len(unique_normalized) > 1:
-            inconsistent_fields.append((fname, doc_vals))
-
-    if inconsistent_fields:
-        st.subheader("Cross-Document Inconsistencies")
-        st.warning(
-            f"Found {len(inconsistent_fields)} field(s) with different values "
-            f"across documents. These may indicate data entry errors."
-        )
-        for fname, doc_vals in inconsistent_fields:
-            field_display = fname.replace("_", " ").title()
-            with st.expander(f"Inconsistent: {field_display}", expanded=True):
-                inc_data = []
-                for doc_name, vals in doc_vals.items():
-                    inc_data.append({
-                        "Document": doc_name,
-                        "Raw Value": vals["raw"],
-                        "Normalized": vals["normalized"],
-                    })
-                st.dataframe(pd.DataFrame(inc_data), use_container_width=True, hide_index=True)
-
-    st.divider()
-
-    # Let CG click to view details of a specific document
-    doc_options = [r.get("_file_name", f"Doc {i+1}") for i, r in enumerate(batch)]
-    selected_doc = st.selectbox("Select document for detail view", options=doc_options)
-    selected_idx = doc_options.index(selected_doc)
-    st.session_state.verification_result = batch[selected_idx]
 
 st.divider()
 
