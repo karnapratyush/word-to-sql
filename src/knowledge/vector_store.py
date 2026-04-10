@@ -22,13 +22,10 @@ Usage:
     # context.few_shot_examples = 3 similar question-to-SQL pairs
 """
 
-import os
 import threading
 from dataclasses import dataclass, field
-from functools import lru_cache
 
 import chromadb
-from chromadb.config import Settings as ChromaSettings
 
 from src.knowledge.semantic_layer import TABLE_DESCRIPTIONS, RELATIONSHIP_DESCRIPTIONS
 from src.knowledge.few_shot_examples import FEW_SHOT_EXAMPLES
@@ -389,13 +386,3 @@ def get_knowledge_store() -> KnowledgeStore:
             if _store_instance is None:
                 _store_instance = KnowledgeStore()
     return _store_instance
-
-
-def reset_knowledge_store():
-    """Reset the singleton to None (used in tests to force re-initialization).
-
-    This allows tests to start with a fresh KnowledgeStore without
-    interference from previous test runs.
-    """
-    global _store_instance
-    _store_instance = None

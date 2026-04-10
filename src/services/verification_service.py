@@ -24,7 +24,7 @@ import logging
 from typing import Optional
 
 from src.repositories.verification_repo import VerificationRepository
-from src.verification.agent import run_verification, run_verification_from_document
+from src.verification.agent import run_verification
 from src.verification.rules_loader import list_available_customers
 
 # ── Logger ──────────────────────────────────────────────────────────────
@@ -96,37 +96,6 @@ class VerificationService:
             shipment_ref=shipment_ref,
             db_path=self._db_path,
             doc_type_hint=doc_type_hint,
-        )
-
-    def process_existing_document(
-        self,
-        document_id: str,
-        customer_id: str,
-        shipment_ref: Optional[str] = None,
-    ) -> dict:
-        """Re-verify a previously extracted document against customer rules.
-
-        Loads the extraction from the database (no re-extraction needed)
-        and runs the comparison + draft generation + storage steps.
-
-        Args:
-            document_id: UUID of the previously extracted document.
-            customer_id: Customer identifier matching YAML config.
-            shipment_ref: Optional shipment reference number.
-
-        Returns:
-            Dict with verification outcome.
-        """
-        logger.info(
-            "VerificationService.process_existing_document: doc=%s, customer=%s",
-            document_id, customer_id,
-        )
-
-        return run_verification_from_document(
-            document_id=document_id,
-            customer_id=customer_id,
-            shipment_ref=shipment_ref,
-            db_path=self._db_path,
         )
 
     # ── Compare Confirmed Fields (Phase 2) ────────────────────────────

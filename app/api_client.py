@@ -158,25 +158,6 @@ class APIClient:
             resp.raise_for_status()
             return resp.json()
 
-    def review_document(self, document_id: str, status: str, corrected_fields: Optional[dict] = None) -> dict:
-        """PUT /api/documents/{document_id}/review — Update review status.
-
-        Args:
-            document_id: UUID of the document to review.
-            status: New status (approved, rejected, corrected).
-            corrected_fields: If correcting, the updated field values.
-
-        Returns:
-            Dict confirming the update.
-        """
-        with self._client() as client:
-            resp = client.put(f"/documents/{document_id}/review", json={
-                "status": status,
-                "corrected_fields": corrected_fields,
-            })
-            resp.raise_for_status()
-            return resp.json()
-
     def approve_document(self, request_data: dict) -> dict:
         """POST /api/documents/approve — Approve and store extraction.
 

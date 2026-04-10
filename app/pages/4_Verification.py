@@ -213,6 +213,24 @@ if extract_button and not shipment_ref.strip():
     extract_button = False
 
 if extract_button and len(uploaded_files) > 0:
+    # ── Pre-extraction check: detect duplicate types from filenames ────
+    # Quick heuristic before spending LLM calls — check filenames for
+    # obvious duplicates like two files containing "bol" or "inv".
+    _type_hints = {"bol": [], "bl": [], "inv": [], "pack": [], "customs": [], "cert": []}
+    for f in uploaded_files:
+        fname = f.name.lower()
+        for hint in _type_hints:
+            if hint in fname:
+                _type_hints[hint].append(f.name)
+
+    filename_duplicates = {k: v for k, v in _type_hints.items() if len(v) > 1}
+    if filename_duplicates:
+        dup_details = ", ".join(f"{k}: {v}" for k, v in filename_duplicates.items())
+        st.error(f"Only one document of each type per shipment. Duplicate filenames detected: {dup_details}")
+        st.info("Please upload only one of each document type (BOL, Invoice, Packing List, etc.)")
+        extract_button = False
+
+if extract_button and len(uploaded_files) > 0:
     st.session_state.extraction_results = []
     st.session_state.verification_results_batch = []
     st.session_state.verification_result = None
@@ -269,11 +287,30 @@ if extract_button and len(uploaded_files) > 0:
 
     progress.progress(1.0, text=f"Extracted {len(extractions)} document(s)")
 
-    # ── Issue 2: Check for duplicate document types in the batch ────
+    # ── Post-extraction check: reject duplicate document types ─────────
+    # After LLM classification, if two files classified as same type → keep
+    # only the first of each type, reject the rest.
     doc_types_in_batch = [e.get("document_type") for e in extractions if not e.get("error")]
     duplicates = [t for t in set(doc_types_in_batch) if doc_types_in_batch.count(t) > 1]
     if duplicates:
-        st.warning(f"Duplicate document types detected: {', '.join(duplicates)}. Each shipment should have only one of each type.")
+        st.error(
+            f"Only one document of each type allowed per shipment. "
+            f"Duplicates found: {', '.join(d.replace('_', ' ').title() for d in duplicates)}"
+        )
+        # Keep only the first of each type, mark others as rejected
+        seen_types = set()
+        filtered = []
+        rejected = []
+        for e in extractions:
+            dtype = e.get("document_type", "unknown")
+            if dtype in seen_types:
+                rejected.append(e.get("_file_name", "unknown"))
+            else:
+                seen_types.add(dtype)
+                filtered.append(e)
+        if rejected:
+            st.warning(f"Rejected duplicates: {', '.join(rejected)}. Only the first of each type is kept.")
+        extractions = filtered
 
     # ── Issue 2: Check against already-stored documents for this shipment
     try:

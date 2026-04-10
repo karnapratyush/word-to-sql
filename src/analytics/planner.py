@@ -186,6 +186,3 @@ def _rule_based_classify(query: str) -> PlannerResult:
         reasoning="Rule-based fallback: assuming data query.",
         requires_sql=True,
     )
-
-
-    # NOTE: _format_history was removed — now using shared format_history from src.common.utils

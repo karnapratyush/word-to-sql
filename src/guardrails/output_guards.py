@@ -14,7 +14,7 @@ import json
 import re
 from src.common.schemas import GuardrailResult
 from src.common.config_loader import load_settings
-from src.common.utils import DML_PATTERN, strip_markdown_fences  # noqa: F401 — strip_markdown_fences available for callers
+from src.common.utils import DML_PATTERN
 
 
 # ── SQL Validation ───────────────────────────────────────────────────

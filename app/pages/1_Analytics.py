@@ -21,8 +21,6 @@ if PROJECT_ROOT not in sys.path:
 
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.io as pio
-import json
 
 # ── Page Configuration ───────────────────────────────────────────────
 st.set_page_config(

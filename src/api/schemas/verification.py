@@ -5,7 +5,6 @@ verification. They translate between the verification pipeline's
 internal dicts and the JSON structures sent/received over HTTP.
 
 Schemas:
-    VerificationProcessRequest — POST /api/verification/process
     VerificationProcessResponse — returned after verification
     VerificationListResponse — GET /api/verification (list view)
     VerificationDetailResponse — GET /api/verification/{id} (detail view)
@@ -15,7 +14,7 @@ Schemas:
     FieldComparisonResponse — nested model for field comparisons
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 
 
@@ -44,30 +43,7 @@ class FieldComparisonResponse(BaseModel):
     rule_violated: Optional[str] = None
 
 
-# ── Process Request / Response ──────────────────────────────────────────
-
-class VerificationProcessRequest(BaseModel):
-    """POST /api/verification/process — request body.
-
-    Sent when the user uploads a document for verification. The file
-    itself is uploaded as multipart form data; this model captures the
-    additional metadata sent alongside the file.
-
-    Attributes:
-        customer_id: Customer identifier matching a YAML rules file.
-        shipment_ref: Shipment reference number. Strongly recommended --
-            required by the UI, used for grouping batch documents.
-            The API still accepts None for backward compatibility with
-            programmatic callers, but the UI enforces it.
-        doc_type_hint: Optional document type hint for the vision pipeline.
-    """
-    customer_id: str
-    shipment_ref: Optional[str] = Field(
-        default=None,
-        description="Shipment reference number. Required by the UI for batch grouping.",
-    )
-    doc_type_hint: Optional[str] = None
-
+# ── Process Response ───────────────────────────────────────────────────────
 
 class VerificationProcessResponse(BaseModel):
     """POST /api/verification/process — response body.

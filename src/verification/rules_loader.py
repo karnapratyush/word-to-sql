@@ -26,7 +26,6 @@ File format (see config/customer_rules/sample_customer.yaml for example):
 Public functions:
     load_customer_rules(customer_id) -> dict | None
     list_available_customers() -> list[dict]
-    get_rules_directory() -> str
 """
 
 import logging
@@ -43,15 +42,6 @@ logger = logging.getLogger(__name__)
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Customer rules YAML files live in config/customer_rules/
 _RULES_DIR = os.path.join(_BASE_DIR, "config", "customer_rules")
-
-
-def get_rules_directory() -> str:
-    """Return the absolute path to the customer rules directory.
-
-    Returns:
-        Absolute path string to config/customer_rules/.
-    """
-    return _RULES_DIR
 
 
 def load_customer_rules(customer_id: str) -> Optional[dict]:

@@ -95,10 +95,6 @@ def create_model_instance(provider: str, model: str, temperature: float, max_tok
     return factory(model, temperature, max_tokens, timeout)
 
 
-# Backward-compatible alias (was private, now public)
-_create_model_instance = create_model_instance
-
-
 # ── Public Factory Functions ─────────────────────────────────────────
 
 def get_model(task: str) -> tuple[Any, str]:

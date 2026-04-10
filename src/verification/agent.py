@@ -44,7 +44,6 @@ Public functions:
 
 import logging
 import uuid
-from datetime import datetime
 from typing import Optional
 
 from src.common.config_loader import load_settings
@@ -52,7 +51,6 @@ from src.common.exceptions import ExtractionError, UnsupportedFileError
 from src.common.schemas import ExtractionRequest
 from src.verification.comparator import (
     FieldComparison,
-    check_cross_document_consistency,
     compare_fields,
     determine_overall_status,
 )
