@@ -7,6 +7,7 @@ db/*.db
 db/*.db-wal
 db/*.db-shm
 db/uploads/
+db/inbox/
 db/samples/*.pdf
 db/samples/*.png
 .pytest_cache/
@@ -17,3 +18,4 @@ build/
 *claude/
 eval/results/
 chromadb/
+*.pem

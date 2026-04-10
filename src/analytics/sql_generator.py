@@ -181,6 +181,3 @@ def _parse_sql_response(raw: str) -> SQLGenerationResult:
         explanation="(extracted raw SQL from response)",
         tables_used=[],
     )
-
-
-    # NOTE: _format_history was removed — now using shared format_history from src.common.utils

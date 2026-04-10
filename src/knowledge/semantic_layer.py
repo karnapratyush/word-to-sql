@@ -174,6 +174,47 @@ TABLE_DESCRIPTIONS = [
             ),
         },
     },
+    # ── Verification Results Table (Part 2) ────────────────────────────
+    {
+        "id": "table_verification_results",
+        "text": (
+            "verification_results table: Stores the outcome of document verification against "
+            "customer rules. Each row is one verification session — a document compared field-by-field "
+            "against a customer's rules. Has overall_status (approved, amendment_required, uncertain, "
+            "superseded), customer_id, shipment_ref, document_type, draft_reply (generated email), "
+            "reviewed_by, reviewed_at. Use when questions mention verification, amendment, approval, "
+            "customer compliance, document checking, or review status."
+        ),
+        "metadata": {
+            "table": "verification_results",
+            "columns": "id, verification_id, document_id, shipment_ref, customer_id, document_type, received_at, overall_status, draft_reply, reviewed_by, reviewed_at, notes",
+            "row_count": 0,
+            "key_values": "overall_status: approved|amendment_required|uncertain|superseded|extraction_failed. document_type: invoice|bill_of_lading|packing_list|customs_declaration",
+            "joins": "JOIN extracted_documents ON verification_results.document_id = extracted_documents.document_id",
+            "example": "A BOL verification for Toyota Japan: customer_id='toyota_japan', overall_status='amendment_required', document_type='bill_of_lading'",
+        },
+    },
+    # ── Verification Fields Table (Part 2) ───────────────────────────
+    {
+        "id": "table_verification_fields",
+        "text": (
+            "verification_fields table: Per-field comparison results from document verification. "
+            "Each row is one field checked: field_name, extracted_value (what the LLM read), "
+            "expected_value (from customer rules), status (match/mismatch/uncertain/no_rule), "
+            "confidence (0-1), rule_type (exact/prefix/one_of/tolerance/contains_any), "
+            "rule_violated (explanation of why it failed). Links to verification_results via verification_id. "
+            "Use when questions mention which fields fail, field-level accuracy, mismatch rates, "
+            "common discrepancies, or comparison details."
+        ),
+        "metadata": {
+            "table": "verification_fields",
+            "columns": "id, verification_id, field_name, extracted_value, expected_value, status, confidence, rule_type, rule_violated",
+            "row_count": 0,
+            "key_values": "status: match|mismatch|uncertain|no_rule. rule_type: exact|prefix|one_of|tolerance|contains_any",
+            "joins": "JOIN verification_results ON verification_fields.verification_id = verification_results.verification_id",
+            "example": "field_name='currency', extracted_value='EUR', expected_value='USD', status='mismatch', rule_type='exact'",
+        },
+    },
 ]
 
 # ── Cross-Table Relationship Descriptions ────────────────────────────

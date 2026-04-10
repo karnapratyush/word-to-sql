@@ -1,0 +1,37 @@
+# Customer rules for ACME Global Trading Corp.
+# Each rule defines what value is expected for a field extracted from SU documents.
+# The comparator checks extracted values against these rules.
+# Swapping this file changes verification behavior without touching code.
+
+customer_id: "ACME-GLOBAL"
+customer_name: "ACME Global Trading Corp"
+
+rules:
+  consignee_name:
+    expected: "ACME Global Trading Corp, Rotterdam"
+    match_type: exact
+
+  hs_code:
+    expected_prefix: "8471"
+    match_type: prefix
+
+  port_of_discharge:
+    expected: ["Port of Rotterdam", "Port of Amsterdam"]
+    match_type: one_of
+
+  gross_weight:
+    max_deviation_percent: 5
+    reference_value: 15000
+    match_type: tolerance
+
+  currency:
+    expected: "USD"
+    match_type: exact
+
+  incoterm:
+    expected: ["FOB", "CIF", "CFR"]
+    match_type: one_of
+
+  description_of_goods:
+    expected_contains: ["electronics", "computer", "parts", "machinery"]
+    match_type: contains_any

@@ -27,7 +27,6 @@ Public functions:
 """
 
 import logging
-import os
 from typing import Optional
 
 from src.common.config_loader import load_settings

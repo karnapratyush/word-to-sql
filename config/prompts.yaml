@@ -226,3 +226,72 @@ document_types:
       - declared_value
       - currency
       - duty_amount
+
+verification:
+  draft_amendment: |
+    Write a professional amendment request email for a shipping document
+    verification that found discrepancies.
+
+    Customer: {customer_name}
+    Shipment Reference: {shipment_ref}
+    Verification Status: {overall_status}
+
+    Summary: {match_count} fields matched, {mismatch_count} mismatched,
+    {uncertain_count} uncertain out of {total_fields} total fields verified.
+
+    DISCREPANCIES FOUND:
+    {discrepancy_summary}
+
+    Write a polite but firm email requesting the customer to review and
+    submit amended documents for the discrepant fields listed above.
+    Include:
+    - A clear subject line referencing the shipment
+    - A numbered list of each discrepancy with extracted vs. expected values
+    - A deadline suggestion (5 business days)
+    - A professional closing
+
+    Write ONLY the email body (no markdown, no code blocks).
+
+  draft_approval: |
+    Write a brief professional approval confirmation email for a shipping
+    document that passed automated verification.
+
+    Customer: {customer_name}
+    Shipment Reference: {shipment_ref}
+    Verification Status: {overall_status}
+
+    Summary: All {match_count} verified fields match our records.
+
+    Write a concise confirmation email that:
+    - Confirms the documents have been verified and accepted
+    - States no further action is required
+    - Has a professional closing
+
+    Write ONLY the email body (no markdown, no code blocks).
+
+  draft_amendment_batch: |
+    Write a professional amendment request email for a BATCH verification
+    of multiple shipping documents within the same shipment.
+
+    Customer: {customer_name}
+    Shipment Reference: {shipment_ref}
+    Verification Status: {overall_status}
+
+    Summary: {match_count} fields matched, {mismatch_count} mismatched,
+    {uncertain_count} uncertain out of {total_fields} total fields verified
+    across multiple documents.
+
+    DETAILS (includes per-document discrepancies and any cross-document
+    inconsistencies):
+    {discrepancy_summary}
+
+    Write a polite but firm email requesting the customer to review and
+    submit amended documents. The email should:
+    - Have a clear subject line referencing the shipment
+    - List ALL documents that were processed
+    - Group discrepancies by document
+    - Highlight any cross-document inconsistencies separately
+    - Suggest a deadline of 5 business days
+    - Have a professional closing
+
+    Write ONLY the email body (no markdown, no code blocks).

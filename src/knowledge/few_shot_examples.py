@@ -549,4 +549,72 @@ FEW_SHOT_EXAMPLES = [
         "tables": ["extracted_documents", "shipments", "carriers"],
         "complexity": "hard",
     },
+
+    # ── Verification Queries (Part 2) ────────────────────────────────
+
+    {
+        "id": "fs_verification_field_failures",
+        "question": "Which fields fail most often in verifications?",
+        "sql": (
+            "SELECT field_name, status, COUNT(*) as count "
+            "FROM verification_fields "
+            "WHERE status IN ('mismatch', 'uncertain') "
+            "GROUP BY field_name, status "
+            "ORDER BY count DESC "
+            "LIMIT 20"
+        ),
+        "tables": ["verification_fields"],
+        "complexity": "medium",
+    },
+    {
+        "id": "fs_verification_by_status",
+        "question": "How many verifications by status?",
+        "sql": (
+            "SELECT overall_status, COUNT(*) as count "
+            "FROM verification_results "
+            "GROUP BY overall_status "
+            "ORDER BY count DESC"
+        ),
+        "tables": ["verification_results"],
+        "complexity": "simple",
+    },
+    {
+        "id": "fs_verification_all",
+        "question": "Show all verification results",
+        "sql": (
+            "SELECT verification_id, customer_id, shipment_ref, document_type, "
+            "overall_status, reviewed_by, received_at "
+            "FROM verification_results "
+            "ORDER BY received_at DESC LIMIT 20"
+        ),
+        "tables": ["verification_results"],
+        "complexity": "simple",
+    },
+    {
+        "id": "fs_verification_customer",
+        "question": "Show verifications for a specific customer",
+        "sql": (
+            "SELECT vr.verification_id, vr.shipment_ref, vr.document_type, "
+            "vr.overall_status, vr.received_at "
+            "FROM verification_results vr "
+            "WHERE vr.customer_id = 'sample_customer' "
+            "ORDER BY vr.received_at DESC LIMIT 20"
+        ),
+        "tables": ["verification_results"],
+        "complexity": "simple",
+    },
+    {
+        "id": "fs_verification_mismatch_details",
+        "question": "Show all mismatched fields with their expected vs extracted values",
+        "sql": (
+            "SELECT vf.field_name, vf.extracted_value, vf.expected_value, "
+            "vf.confidence, vf.rule_violated, vr.customer_id, vr.shipment_ref "
+            "FROM verification_fields vf "
+            "JOIN verification_results vr ON vf.verification_id = vr.verification_id "
+            "WHERE vf.status = 'mismatch' "
+            "ORDER BY vr.received_at DESC LIMIT 20"
+        ),
+        "tables": ["verification_fields", "verification_results"],
+        "complexity": "medium",
+    },
 ]

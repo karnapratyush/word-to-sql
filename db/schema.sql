@@ -143,3 +143,45 @@ CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(invoice_date);
 CREATE INDEX IF NOT EXISTS idx_extracted_type ON extracted_documents(document_type);
 CREATE INDEX IF NOT EXISTS idx_extracted_review ON extracted_documents(review_status);
 CREATE INDEX IF NOT EXISTS idx_extracted_linked ON extracted_documents(linked_shipment_id);
+
+-- ── Verification Tables (Part 2) ──────────────────────────────────────
+-- These tables store the results of automated document verification.
+-- verification_results holds the overall verification outcome per document,
+-- while verification_fields stores the field-by-field comparison details.
+
+CREATE TABLE IF NOT EXISTS verification_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    verification_id TEXT UNIQUE NOT NULL,
+    document_id TEXT,
+    shipment_ref TEXT,
+    customer_id TEXT NOT NULL,
+    document_type TEXT,
+    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    overall_status TEXT NOT NULL,
+    draft_reply TEXT,
+    reviewed_by TEXT,
+    reviewed_at TIMESTAMP,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS verification_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    verification_id TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    extracted_value TEXT,
+    expected_value TEXT,
+    status TEXT NOT NULL,
+    confidence REAL,
+    rule_type TEXT,
+    rule_violated TEXT,
+    FOREIGN KEY (verification_id) REFERENCES verification_results(verification_id)
+);
+
+-- Verification indexes for fast lookups by status, customer, shipment, field name
+CREATE INDEX IF NOT EXISTS idx_vr_status ON verification_results(overall_status);
+CREATE INDEX IF NOT EXISTS idx_vr_customer ON verification_results(customer_id);
+CREATE INDEX IF NOT EXISTS idx_vr_shipment ON verification_results(shipment_ref);
+CREATE INDEX IF NOT EXISTS idx_vr_doctype ON verification_results(document_type);
+CREATE INDEX IF NOT EXISTS idx_vf_status ON verification_fields(status);
+CREATE INDEX IF NOT EXISTS idx_vf_name ON verification_fields(field_name);
+CREATE INDEX IF NOT EXISTS idx_vf_verification ON verification_fields(verification_id);

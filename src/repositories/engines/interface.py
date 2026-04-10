@@ -18,7 +18,7 @@ This standardization allows BaseRepository and all business repositories
 to work identically across SQLite, MySQL, PostgreSQL, etc.
 """
 
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable

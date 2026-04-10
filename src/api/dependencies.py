@@ -22,6 +22,7 @@ Usage in routes:
 from fastapi import Request
 
 from src.services.analytics_service import AnalyticsService
+from src.services.verification_service import VerificationService
 from src.services.vision_service import VisionService
 
 
@@ -57,3 +58,20 @@ def get_vision_service(request: Request) -> VisionService:
     """
     db_path = getattr(request.app.state, "db_path", None)
     return VisionService(db_path=db_path)
+
+
+def get_verification_service(request: Request) -> VerificationService:
+    """Provide a VerificationService instance for route handler injection.
+
+    Reads the app-level db_path from app.state (set in create_app) and
+    passes it to the service. The VerificationService handles document
+    verification against customer rules, review, and statistics.
+
+    Args:
+        request: FastAPI Request object (provides access to app.state).
+
+    Returns:
+        A VerificationService instance configured with the app's db_path.
+    """
+    db_path = getattr(request.app.state, "db_path", None)
+    return VerificationService(db_path=db_path)

@@ -12,7 +12,7 @@ Schemas:
     DocumentRejectResponse — returned after rejecting an upload
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 
 
