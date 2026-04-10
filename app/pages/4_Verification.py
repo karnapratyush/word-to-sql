@@ -175,40 +175,51 @@ else:
         help="Enter the customer ID manually (must match a YAML filename).",
     )
 
-# Shipment reference (optional)
+# Shipment reference (optional but recommended for grouping multiple docs)
 shipment_ref = st.text_input(
-    "Shipment Reference (optional)",
+    "Shipment Reference",
     value="",
-    help="Optional shipment reference number for cross-referencing.",
+    help="Shipment reference number. When uploading multiple documents for the same shipment, use the same reference to group them.",
 )
 
-# File uploader
-uploaded_file = st.file_uploader(
-    "Choose a document to verify",
+# File uploader — accepts multiple files for the same shipment
+uploaded_files = st.file_uploader(
+    "Choose documents to verify",
     type=["pdf", "png", "jpg", "jpeg"],
-    help="Supported formats: PDF, PNG, JPG. Maximum size: 10 MB.",
+    accept_multiple_files=True,
+    help="Upload one or more documents for the same shipment. Each will be verified independently against the customer's rules.",
 )
 
 # Verify button
 verify_button = st.button(
-    "Verify Document",
-    disabled=(uploaded_file is None),
+    "Verify All Documents",
+    disabled=(len(uploaded_files) == 0),
     type="primary",
     use_container_width=True,
 )
 
 # ── Handle Verification ─────────────────────────────────────────────
-if verify_button and uploaded_file is not None:
+# Process each uploaded file independently against the same customer rules.
+# Results are collected and shown together.
+if verify_button and len(uploaded_files) > 0:
     # Reset previous state
     st.session_state.verification_result = None
+    st.session_state.verification_results_batch = []
     st.session_state.verification_reviewed = False
     st.session_state.selected_verification_id = None
 
-    with st.spinner("Extracting and verifying document... This may take 30-60 seconds."):
-        try:
-            from app.api_client import get_api_client
-            client = get_api_client()
+    from app.api_client import get_api_client
+    client = get_api_client()
 
+    results = []
+    progress = st.progress(0, text="Verifying documents...")
+
+    for i, uploaded_file in enumerate(uploaded_files):
+        progress.progress(
+            (i) / len(uploaded_files),
+            text=f"Verifying {uploaded_file.name} ({i+1}/{len(uploaded_files)})..."
+        )
+        try:
             file_bytes = uploaded_file.getvalue()
             file_name = uploaded_file.name
 
@@ -218,19 +229,66 @@ if verify_button and uploaded_file is not None:
                 customer_id=selected_customer_id,
                 shipment_ref=shipment_ref if shipment_ref else None,
             )
-
-            st.session_state.verification_result = result
-            st.rerun()
+            result["_file_name"] = file_name
+            results.append(result)
 
         except Exception as e:
-            st.error(f"Verification failed: {str(e)}")
-            st.info("Make sure the API is running: `python run_api.py`")
+            results.append({
+                "_file_name": file_name,
+                "overall_status": "extraction_failed",
+                "error": str(e),
+                "fields": [],
+            })
+
+    progress.progress(1.0, text=f"Done — {len(results)} document(s) verified")
+
+    # Store results — single doc goes to verification_result, batch to list
+    if len(results) == 1:
+        st.session_state.verification_result = results[0]
+    st.session_state.verification_results_batch = results
+    st.rerun()
 
 
 # ── Show Review Success Message ──────────────────────────────────────
 if st.session_state.verification_reviewed:
     st.success("Review submitted successfully!")
     st.session_state.verification_reviewed = False
+
+# ── Batch Results Summary ───────────────────────────────────────────
+# When multiple files were uploaded, show a summary table first.
+# CG can click on a row to see the detailed field-by-field view.
+if "verification_results_batch" not in st.session_state:
+    st.session_state.verification_results_batch = []
+
+batch = st.session_state.verification_results_batch
+if batch and len(batch) > 1:
+    st.subheader(f"Batch Verification — {len(batch)} Documents")
+    if shipment_ref:
+        st.caption(f"Shipment: {shipment_ref}")
+
+    summary_data = []
+    for r in batch:
+        status = r.get("overall_status", "unknown")
+        badge = get_status_badge(status)
+        label = get_status_label(status)
+        n_fields = len(r.get("fields", []))
+        mismatches = sum(1 for f in r.get("fields", []) if f.get("status") == "mismatch")
+        uncertain = sum(1 for f in r.get("fields", []) if f.get("status") == "uncertain")
+        summary_data.append({
+            "Document": r.get("_file_name", "unknown"),
+            "Status": f"{badge} {label}",
+            "Fields": n_fields,
+            "Mismatches": mismatches,
+            "Uncertain": uncertain,
+        })
+
+    st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+
+    # Let CG click to view details of a specific document
+    doc_options = [r.get("_file_name", f"Doc {i+1}") for i, r in enumerate(batch)]
+    selected_doc = st.selectbox("Select document for detail view", options=doc_options)
+    selected_idx = doc_options.index(selected_doc)
+    st.session_state.verification_result = batch[selected_idx]
 
 st.divider()
 
