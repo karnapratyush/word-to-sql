@@ -129,6 +129,123 @@ class VerificationService:
             db_path=self._db_path,
         )
 
+    # ── Compare Confirmed Fields (Phase 2) ────────────────────────────
+
+    def compare_confirmed(
+        self,
+        customer_id: str,
+        shipment_ref: str | None = None,
+        documents: list[dict] | None = None,
+    ) -> dict:
+        """Compare pre-confirmed extracted fields against customer rules.
+
+        Phase 2 of the two-phase flow. CG already reviewed and edited the
+        extracted fields in Phase 1. Now we compare the confirmed values
+        against the customer's rules.
+
+        Args:
+            customer_id: Customer ID for rule lookup.
+            shipment_ref: Shipment reference for grouping.
+            documents: List of dicts with file_name, document_type,
+                extracted_fields, confidence_scores.
+
+        Returns:
+            Same structure as process_document — verification result dict.
+        """
+        from src.verification.rules_loader import load_customer_rules
+        from src.verification.comparator import compare_fields, determine_overall_status
+        from src.verification.draft_generator import generate_draft
+        from src.repositories.verification_repo import VerificationRepository
+        from src.common.config_loader import load_settings
+        import uuid
+
+        logger.info("compare_confirmed: customer=%s, shipment=%s, docs=%d",
+                    customer_id, shipment_ref, len(documents or []))
+
+        # Load customer rules
+        rules_config = load_customer_rules(customer_id)
+        if not rules_config:
+            return {
+                "verification_id": str(uuid.uuid4()),
+                "customer_id": customer_id,
+                "customer_name": "",
+                "shipment_ref": shipment_ref,
+                "overall_status": "no_rules",
+                "comparisons": [],
+                "draft_reply": "",
+                "error": f"No rules found for customer '{customer_id}'",
+                "doc_type_check": None,
+            }
+
+        customer_name = rules_config.get("customer_name", customer_id)
+        rules = rules_config.get("rules", {})
+        settings = load_settings()
+        confidence_threshold = settings.get("verification", {}).get("confidence_threshold", 0.7)
+
+        # Compare each document's fields
+        all_comparisons = []
+        for doc in (documents or []):
+            fields = doc.get("extracted_fields", {})
+            scores = doc.get("confidence_scores", {})
+            comparisons = compare_fields(fields, scores, rules, confidence_threshold)
+            for c in comparisons:
+                all_comparisons.append({
+                    "field_name": c.field_name,
+                    "extracted_value": c.extracted_value,
+                    "extracted_normalized": c.extracted_normalized,
+                    "expected_value": c.expected_value,
+                    "status": c.status,
+                    "confidence": c.confidence,
+                    "rule_type": c.rule_type,
+                    "rule_violated": c.rule_violated,
+                    "_source_doc": doc.get("file_name", "unknown"),
+                })
+
+        overall_status = determine_overall_status(
+            [type('FC', (), d)() for d in all_comparisons]
+            if all_comparisons else []
+        ) if all_comparisons else "approved"
+
+        # Generate draft
+        draft = generate_draft(
+            comparisons=all_comparisons,
+            overall_status=overall_status,
+            customer_name=customer_name,
+            shipment_ref=shipment_ref or "",
+        )
+
+        # Store in DB
+        verification_id = str(uuid.uuid4())
+        doc_id = documents[0].get("document_id", str(uuid.uuid4())) if documents else str(uuid.uuid4())
+
+        try:
+            repo = VerificationRepository(db_path=self._db_path)
+            repo.insert_verification(
+                verification_id=verification_id,
+                document_id=doc_id,
+                customer_id=customer_id,
+                shipment_ref=shipment_ref,
+                overall_status=overall_status,
+                draft_reply=draft,
+                fields_data=all_comparisons,
+            )
+        except Exception as e:
+            logger.warning("Failed to store verification: %s", e)
+
+        return {
+            "verification_id": verification_id,
+            "document_id": doc_id,
+            "customer_id": customer_id,
+            "customer_name": customer_name,
+            "shipment_ref": shipment_ref,
+            "overall_status": overall_status,
+            "comparisons": all_comparisons,
+            "draft_reply": draft,
+            "notes": "",
+            "doc_type_check": None,
+            "error": None,
+        }
+
     # ── List ────────────────────────────────────────────────────────────
 
     def list_verifications(

@@ -34,7 +34,7 @@ Error handling:
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 
 from src.api.dependencies import get_verification_service
 from src.api.schemas.verification import (
@@ -142,6 +142,71 @@ async def process_document(
             status_code=500,
             detail=f"Verification failed: {e}",
         )
+
+
+# ── POST /compare — Compare pre-confirmed fields against customer rules ──
+
+@router.post("/compare", response_model=VerificationProcessResponse)
+async def compare_confirmed_fields(
+    request: dict = Body(...),
+    service: VerificationService = Depends(get_verification_service),
+):
+    """Compare pre-confirmed extracted fields against customer rules.
+
+    This is Phase 2 of the two-phase verification flow:
+    Phase 1: Extract fields (via /api/documents/extract) → CG reviews and edits
+    Phase 2: CG confirms fields → this endpoint compares against rules
+
+    The request body should contain:
+    - customer_id: str (which customer's rules to use)
+    - shipment_ref: str (shipment reference)
+    - documents: list of dicts, each with:
+        - file_name: str
+        - document_type: str
+        - extracted_fields: dict (confirmed field values)
+        - confidence_scores: dict (original confidence per field)
+
+    Returns the same VerificationProcessResponse as /process but skips extraction.
+    """
+    logger.info(
+        "POST /verification/compare: customer=%s, shipment=%s, docs=%d",
+        request.get("customer_id"), request.get("shipment_ref"),
+        len(request.get("documents", [])),
+    )
+
+    try:
+        result = service.compare_confirmed(
+            customer_id=request["customer_id"],
+            shipment_ref=request.get("shipment_ref"),
+            documents=request["documents"],
+        )
+
+        comparisons = [
+            FieldComparisonResponse(**comp)
+            for comp in result.get("comparisons", [])
+        ]
+
+        return VerificationProcessResponse(
+            verification_id=result["verification_id"],
+            document_id=result.get("document_id"),
+            customer_id=result["customer_id"],
+            customer_name=result.get("customer_name", ""),
+            shipment_ref=result.get("shipment_ref"),
+            overall_status=result["overall_status"],
+            document_type=result.get("document_type"),
+            extraction_model=result.get("extraction_model"),
+            extracted_fields=result.get("extracted_fields", {}),
+            confidence_scores=result.get("confidence_scores", {}),
+            comparisons=comparisons,
+            draft_reply=result.get("draft_reply", ""),
+            notes=result.get("notes", ""),
+            doc_type_check=result.get("doc_type_check"),
+            error=result.get("error"),
+        )
+
+    except Exception as e:
+        logger.error("Error in compare_confirmed_fields: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Comparison failed: {e}")
 
 
 # ── GET / — List all verifications ──────────────────────────────────────

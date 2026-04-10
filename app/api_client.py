@@ -251,6 +251,35 @@ class APIClient:
             resp.raise_for_status()
             return resp.json()
 
+    def compare_confirmed_fields(
+        self,
+        customer_id: str,
+        shipment_ref: str,
+        documents: list[dict],
+    ) -> dict:
+        """POST /api/verification/compare — Compare confirmed fields against rules.
+
+        Phase 2 of the two-phase flow: CG already reviewed extracted fields,
+        now compare the confirmed values against customer rules.
+
+        Args:
+            customer_id: Customer ID for rule lookup.
+            shipment_ref: Shipment reference.
+            documents: List of dicts with file_name, document_type,
+                extracted_fields, confidence_scores.
+
+        Returns:
+            Verification result dict with comparisons, status, draft.
+        """
+        with self._client() as client:
+            resp = client.post("/verification/compare", json={
+                "customer_id": customer_id,
+                "shipment_ref": shipment_ref,
+                "documents": documents,
+            })
+            resp.raise_for_status()
+            return resp.json()
+
     def list_verifications(
         self,
         status: Optional[str] = None,
