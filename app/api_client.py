@@ -284,12 +284,14 @@ class APIClient:
         self,
         status: Optional[str] = None,
         customer: Optional[str] = None,
+        shipment: Optional[str] = None,
     ) -> list[dict]:
         """GET /api/verification — List all verification results.
 
         Args:
             status: Optional overall_status filter.
             customer: Optional customer_id filter.
+            shipment: Optional shipment_ref filter (for cross-session tracking).
 
         Returns:
             List of verification result dicts.
@@ -300,6 +302,8 @@ class APIClient:
                 params["status"] = status
             if customer:
                 params["customer"] = customer
+            if shipment:
+                params["shipment"] = shipment
             resp = client.get("/verification", params=params)
             resp.raise_for_status()
             return resp.json()

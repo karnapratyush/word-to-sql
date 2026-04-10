@@ -122,6 +122,7 @@ class VerificationListResponse(BaseModel):
         document_id: UUID of the verified document.
         customer_id: Customer identifier.
         shipment_ref: Shipment reference (or None).
+        document_type: Document type (e.g., invoice, bill_of_lading).
         overall_status: Verification outcome.
         received_at: ISO timestamp of when the verification was processed.
         reviewed_by: Name of the reviewer (or None if not yet reviewed).
@@ -133,6 +134,7 @@ class VerificationListResponse(BaseModel):
     document_id: str = ""
     customer_id: str = ""
     shipment_ref: Optional[str] = None
+    document_type: Optional[str] = None
     overall_status: str = ""
     received_at: Optional[str] = None
     reviewed_by: Optional[str] = None

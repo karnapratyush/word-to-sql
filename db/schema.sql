@@ -152,16 +152,16 @@ CREATE INDEX IF NOT EXISTS idx_extracted_linked ON extracted_documents(linked_sh
 CREATE TABLE IF NOT EXISTS verification_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     verification_id TEXT UNIQUE NOT NULL,
-    document_id TEXT NOT NULL,
+    document_id TEXT,
     shipment_ref TEXT,
     customer_id TEXT NOT NULL,
+    document_type TEXT,
     received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     overall_status TEXT NOT NULL,
     draft_reply TEXT,
     reviewed_by TEXT,
     reviewed_at TIMESTAMP,
-    notes TEXT,
-    FOREIGN KEY (document_id) REFERENCES extracted_documents(document_id)
+    notes TEXT
 );
 
 CREATE TABLE IF NOT EXISTS verification_fields (
@@ -177,9 +177,11 @@ CREATE TABLE IF NOT EXISTS verification_fields (
     FOREIGN KEY (verification_id) REFERENCES verification_results(verification_id)
 );
 
--- Verification indexes for fast lookups by status, customer, field name
+-- Verification indexes for fast lookups by status, customer, shipment, field name
 CREATE INDEX IF NOT EXISTS idx_vr_status ON verification_results(overall_status);
 CREATE INDEX IF NOT EXISTS idx_vr_customer ON verification_results(customer_id);
+CREATE INDEX IF NOT EXISTS idx_vr_shipment ON verification_results(shipment_ref);
+CREATE INDEX IF NOT EXISTS idx_vr_doctype ON verification_results(document_type);
 CREATE INDEX IF NOT EXISTS idx_vf_status ON verification_fields(status);
 CREATE INDEX IF NOT EXISTS idx_vf_name ON verification_fields(field_name);
 CREATE INDEX IF NOT EXISTS idx_vf_verification ON verification_fields(verification_id);

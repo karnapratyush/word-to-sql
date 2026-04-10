@@ -201,34 +201,93 @@ class VerificationService:
                     "_source_doc": doc.get("file_name", "unknown"),
                 })
 
-        overall_status = determine_overall_status(
-            [type('FC', (), d)() for d in all_comparisons]
-            if all_comparisons else []
-        ) if all_comparisons else "approved"
+        # Convert dicts to FieldComparison objects for determine_overall_status and generate_draft
+        from src.verification.comparator import FieldComparison
+        comparison_objects = []
+        for d in all_comparisons:
+            comparison_objects.append(FieldComparison(
+                field_name=d["field_name"],
+                extracted_value=d.get("extracted_value"),
+                extracted_normalized=d.get("extracted_normalized"),
+                expected_value=d.get("expected_value"),
+                status=d["status"],
+                confidence=d.get("confidence", 0),
+                rule_type=d.get("rule_type"),
+                rule_violated=d.get("rule_violated"),
+            ))
+
+        overall_status = determine_overall_status(comparison_objects) if comparison_objects else "approved"
 
         # Generate draft
         draft = generate_draft(
-            comparisons=all_comparisons,
+            comparisons=comparison_objects,
             overall_status=overall_status,
             customer_name=customer_name,
             shipment_ref=shipment_ref or "",
         )
 
-        # Store in DB
+        # Store in DB — use the document_id from Phase 1 persistence (Issue 1)
+        # so verification_results.document_id references a real extracted_documents row.
         verification_id = str(uuid.uuid4())
-        doc_id = documents[0].get("document_id", str(uuid.uuid4())) if documents else str(uuid.uuid4())
+        doc_id = (documents[0].get("document_id") or str(uuid.uuid4())) if documents else str(uuid.uuid4())
+
+        # Determine the primary document type for this verification batch
+        doc_type = None
+        if documents:
+            doc_type = documents[0].get("document_type")
+
+        # ── Issue 4: Version tracking for corrected documents ──────────
+        # Check if a previous verification exists for this shipment + document type.
+        # If so, mark the old one as superseded and record version info in notes.
+        version_notes = ""
+        try:
+            repo = VerificationRepository(db_path=self._db_path)
+            if shipment_ref and doc_type:
+                existing = repo.get_verifications_by_shipment(shipment_ref)
+                for prev in existing:
+                    prev_doc_type = prev.get("document_type")
+                    prev_status = prev.get("overall_status")
+                    if prev_doc_type == doc_type and prev_status != "superseded":
+                        prev_id = prev.get("verification_id")
+                        # Mark the old verification as superseded
+                        repo.update_review_status(
+                            verification_id=prev_id,
+                            reviewed_by="system",
+                            notes=f"Superseded by verification {verification_id}",
+                            overall_status="superseded",
+                        )
+                        version_notes = f"Version 2. Supersedes verification {prev_id}. Previous status: {prev_status}"
+                        logger.info(
+                            "Superseded verification %s (type=%s, shipment=%s)",
+                            prev_id, doc_type, shipment_ref,
+                        )
+                        break  # Only supersede the most recent one
+        except Exception as e:
+            logger.warning("Failed to check/supersede previous verifications: %s", e)
 
         try:
             repo = VerificationRepository(db_path=self._db_path)
-            repo.insert_verification(
+            repo.insert_verification_result(
                 verification_id=verification_id,
                 document_id=doc_id,
                 customer_id=customer_id,
                 shipment_ref=shipment_ref,
+                document_type=doc_type,
                 overall_status=overall_status,
                 draft_reply=draft,
-                fields_data=all_comparisons,
+                notes=version_notes if version_notes else None,
             )
+            for comp in all_comparisons:
+                repo.insert_verification_field(
+                    verification_id=verification_id,
+                    field_name=comp["field_name"],
+                    extracted_value=comp.get("extracted_value"),
+                    expected_value=comp.get("expected_value"),
+                    status=comp["status"],
+                    confidence=comp.get("confidence", 0),
+                    rule_type=comp.get("rule_type"),
+                    rule_violated=comp.get("rule_violated"),
+                )
         except Exception as e:
             logger.warning("Failed to store verification: %s", e)
 
@@ -238,10 +297,11 @@ class VerificationService:
             "customer_id": customer_id,
             "customer_name": customer_name,
             "shipment_ref": shipment_ref,
+            "document_type": doc_type,
             "overall_status": overall_status,
             "comparisons": all_comparisons,
             "draft_reply": draft,
-            "notes": "",
+            "notes": version_notes,
             "doc_type_check": None,
             "error": None,
         }
@@ -252,6 +312,7 @@ class VerificationService:
         self,
         status_filter: Optional[str] = None,
         customer_filter: Optional[str] = None,
+        shipment_filter: Optional[str] = None,
     ) -> list[dict]:
         """Retrieve verification results with optional filtering.
 
@@ -259,18 +320,23 @@ class VerificationService:
             status_filter: Optional overall_status to filter by
                 (e.g., "amendment_required", "approved", "uncertain").
             customer_filter: Optional customer_id to filter by.
+            shipment_filter: Optional shipment_ref to filter by
+                (for cross-session tracking of documents in a shipment).
 
         Returns:
             List of verification result dicts, ordered by newest first.
         """
         logger.info(
-            "VerificationService.list_verifications: status=%s, customer=%s",
-            status_filter, customer_filter,
+            "VerificationService.list_verifications: status=%s, customer=%s, shipment=%s",
+            status_filter, customer_filter, shipment_filter,
         )
 
         repo = VerificationRepository(db_path=self._db_path)
 
-        if status_filter:
+        # Shipment filter takes priority for cross-session tracking (Issue 3)
+        if shipment_filter:
+            return repo.get_verifications_by_shipment(shipment_filter)
+        elif status_filter:
             return repo.get_verifications_by_status(status_filter)
         elif customer_filter:
             return repo.get_verifications_by_customer(customer_filter)

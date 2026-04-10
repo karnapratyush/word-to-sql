@@ -82,6 +82,7 @@ def get_status_badge(status: str) -> str:
         "no_rule": "⚪",
         "extraction_failed": "🔴",
         "no_rules": "🔴",
+        "superseded": "⚫",  # Issue 4: version tracking status
     }
     return badges.get(status, "⚪")
 
@@ -104,6 +105,7 @@ def get_status_label(status: str) -> str:
         "amendment_required": "Amendment Required",
         "extraction_failed": "Extraction Failed",
         "no_rules": "No Customer Rules",
+        "superseded": "Superseded",  # Issue 4: version tracking status
     }
     return labels.get(status, status.replace("_", " ").title())
 
@@ -231,6 +233,30 @@ if extract_button and len(uploaded_files) > 0:
                 file_name=uploaded_file.name,
             )
             result["_file_name"] = uploaded_file.name
+
+            # ── Issue 1: Persist extraction in extracted_documents ──────
+            # Store each extraction via /api/documents/approve so data
+            # survives page refreshes. Status is "pending" (not yet verified).
+            try:
+                approve_result = client.approve_document({
+                    "temp_file_name": uploaded_file.name,
+                    "document_type": result.get("document_type", "unknown"),
+                    "extracted_fields": result.get("fields", {}),
+                    "confidence_scores": result.get("confidence_scores", {}),
+                    "overall_confidence": result.get("overall_confidence", 0),
+                    "extraction_model": result.get("model_used", ""),
+                    "review_status": "pending",  # Not yet verified
+                    "notes": f"Shipment: {shipment_ref}, Customer: {selected_customer_id}",
+                })
+                result["document_id"] = approve_result.get("document_id")
+            except Exception as approve_err:
+                # Don't block extraction flow if persistence fails
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Failed to persist extraction for %s: %s",
+                    uploaded_file.name, approve_err,
+                )
+
             extractions.append(result)
         except Exception as e:
             extractions.append({
@@ -242,6 +268,39 @@ if extract_button and len(uploaded_files) > 0:
             })
 
     progress.progress(1.0, text=f"Extracted {len(extractions)} document(s)")
+
+    # ── Issue 2: Check for duplicate document types in the batch ────
+    doc_types_in_batch = [e.get("document_type") for e in extractions if not e.get("error")]
+    duplicates = [t for t in set(doc_types_in_batch) if doc_types_in_batch.count(t) > 1]
+    if duplicates:
+        st.warning(f"Duplicate document types detected: {', '.join(duplicates)}. Each shipment should have only one of each type.")
+
+    # ── Issue 2: Check against already-stored documents for this shipment
+    try:
+        existing_verifications = client.list_verifications(shipment=shipment_ref)
+        existing_types = set()
+        for v in existing_verifications:
+            if v.get("document_type"):
+                existing_types.add(v["document_type"])
+
+        new_types = set(doc_types_in_batch)
+        overlap = new_types & existing_types
+        if overlap:
+            st.warning(f"This shipment already has verified documents of type: {', '.join(overlap)}. Uploading again will create a new version.")
+    except Exception:
+        pass  # Don't block if check fails
+
+    # ── Issue 3: Show existing verifications for this shipment ──────
+    if shipment_ref.strip():
+        try:
+            existing = client.list_verifications(shipment=shipment_ref)
+            if existing:
+                st.info(f"This shipment already has {len(existing)} verified document(s):")
+                for v in existing:
+                    st.caption(f"  {get_status_badge(v['overall_status'])} {v.get('document_type', 'unknown')} — {get_status_label(v['overall_status'])}")
+        except Exception:
+            pass
+
     st.session_state.extraction_results = extractions
     st.rerun()
 
@@ -288,14 +347,39 @@ if st.session_state.extraction_results and st.session_state.phase == "review":
                 )
                 edited_fields[field_name] = edited_val
 
+            # Issue 1: Include document_id from Phase 1 persistence so
+            # verification_results.document_id references real records.
             edited_documents.append({
                 "file_name": file_name,
                 "document_type": doc_type,
                 "extracted_fields": edited_fields,
                 "confidence_scores": scores,
+                "document_id": extraction.get("document_id"),
             })
 
     st.divider()
+
+    # ── Issue 3: Shipment History — show all verifications for this shipment
+    # This helps CG see that BOL was already verified when uploading Invoice.
+    if shipment_ref and shipment_ref.strip():
+        try:
+            from app.api_client import get_api_client
+            history_client = get_api_client()
+            existing = history_client.list_verifications(shipment=shipment_ref)
+            if existing:
+                st.subheader("Shipment History")
+                st.info(f"This shipment has {len(existing)} existing verification(s):")
+                for v in existing:
+                    v_status = v.get("overall_status", "unknown")
+                    v_doc_type = v.get("document_type", "unknown") or "unknown"
+                    st.caption(
+                        f"  {get_status_badge(v_status)} "
+                        f"{v_doc_type.replace('_', ' ').title()} — "
+                        f"{get_status_label(v_status)}"
+                    )
+                st.divider()
+        except Exception:
+            pass  # Don't block the review flow
 
     # Confirm and verify button
     verify_button = st.button(
@@ -613,6 +697,7 @@ try:
                 "ID": v_id[:8] + "..." if v_id else "",
                 "Status": f"{get_status_badge(status)} {get_status_label(status)}",
                 "Customer": v.get("customer_id", ""),
+                "Doc Type": (v.get("document_type") or "N/A").replace("_", " ").title(),
                 "Shipment": v.get("shipment_ref") or "N/A",
                 "Received": v.get("received_at", "")[:19] if v.get("received_at") else "N/A",
                 "Reviewed By": v.get("reviewed_by") or "Pending",

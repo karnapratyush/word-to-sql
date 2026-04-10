@@ -221,29 +221,36 @@ def list_verifications(
         default=None,
         description="Filter by customer_id",
     ),
+    shipment: Optional[str] = Query(
+        default=None,
+        description="Filter by shipment_ref to see all verifications for a shipment",
+    ),
     service: VerificationService = Depends(get_verification_service),
 ):
     """List all verification results with optional filtering.
 
     Returns a summary view of all verifications, ordered by newest first.
-    Use the status or customer query parameters to filter results.
+    Use the status, customer, or shipment query parameters to filter results.
 
     Args:
         status: Optional overall_status filter.
         customer: Optional customer_id filter.
+        shipment: Optional shipment_ref filter (for cross-session tracking).
         service: Injected VerificationService instance.
 
     Returns:
         List of VerificationListResponse objects.
     """
     logger.info(
-        "GET /verification: status=%s, customer=%s", status, customer,
+        "GET /verification: status=%s, customer=%s, shipment=%s",
+        status, customer, shipment,
     )
 
     try:
         results = service.list_verifications(
             status_filter=status,
             customer_filter=customer,
+            shipment_filter=shipment,
         )
         return [VerificationListResponse(**r) for r in results]
 

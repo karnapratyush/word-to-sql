@@ -14,10 +14,13 @@ its field details. The repository ensures they are always written and
 read together consistently.
 """
 
+import logging
 from datetime import datetime
 from typing import Optional
 
 from src.repositories.base import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 
 class VerificationRepository(BaseRepository):
@@ -25,12 +28,39 @@ class VerificationRepository(BaseRepository):
 
     Provides methods to:
     - Insert verification results and their field comparisons
-    - Retrieve verifications by ID, status, or customer
+    - Retrieve verifications by ID, status, customer, or shipment
     - Update review status (when a human reviews the verification)
     - Get aggregate statistics for the dashboard
 
     All methods use parameterized queries to prevent SQL injection.
     """
+
+    # Class-level flag to avoid repeated ALTER TABLE attempts across instances
+    _migration_done = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Ensure the document_type column exists for existing databases
+        # that were created before this column was added to the schema.
+        if not VerificationRepository._migration_done:
+            self._ensure_document_type_column()
+            VerificationRepository._migration_done = True
+
+    def _ensure_document_type_column(self) -> None:
+        """Add the document_type column to verification_results if missing.
+
+        Existing databases created before Issue 2/3/4 changes won't have
+        this column. ALTER TABLE ADD COLUMN is safe in SQLite -- it's a
+        no-op if the column already exists (we catch the error).
+        """
+        try:
+            self._execute_write(
+                "ALTER TABLE verification_results ADD COLUMN document_type TEXT"
+            )
+            logger.info("Added document_type column to verification_results")
+        except Exception:
+            # Column already exists or table doesn't exist yet -- both are fine
+            pass
 
     # ── Insert Operations ───────────────────────────────────────────────
 
@@ -41,6 +71,7 @@ class VerificationRepository(BaseRepository):
         customer_id: str,
         overall_status: str,
         shipment_ref: Optional[str] = None,
+        document_type: Optional[str] = None,
         draft_reply: Optional[str] = None,
         notes: Optional[str] = None,
     ) -> None:
@@ -56,19 +87,21 @@ class VerificationRepository(BaseRepository):
             overall_status: Verification outcome (approved, amendment_required,
                 uncertain, extraction_failed, no_rules).
             shipment_ref: Optional shipment reference number.
+            document_type: Optional document type (e.g., invoice, bill_of_lading).
             draft_reply: Optional generated draft email text.
             notes: Optional notes about the verification.
         """
         self._execute_write(
             """INSERT INTO verification_results
             (verification_id, document_id, shipment_ref, customer_id,
-             overall_status, draft_reply, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+             document_type, overall_status, draft_reply, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 verification_id,
                 document_id,
                 shipment_ref,
                 customer_id,
+                document_type,
                 overall_status,
                 draft_reply,
                 notes,
@@ -198,6 +231,26 @@ class VerificationRepository(BaseRepository):
             WHERE customer_id = ?
             ORDER BY received_at DESC""",
             (customer_id,),
+        )
+
+    def get_verifications_by_shipment(self, shipment_ref: str) -> list[dict]:
+        """Retrieve all verifications for a specific shipment reference.
+
+        Used for tracking multiple documents across upload sessions
+        for the same shipment, and for version tracking when a document
+        is re-uploaded.
+
+        Args:
+            shipment_ref: The shipment reference to filter by.
+
+        Returns:
+            List of dicts ordered by newest first.
+        """
+        return self._execute(
+            """SELECT * FROM verification_results
+            WHERE shipment_ref = ?
+            ORDER BY received_at DESC""",
+            (shipment_ref,),
         )
 
     # ── Update Operations ───────────────────────────────────────────────
