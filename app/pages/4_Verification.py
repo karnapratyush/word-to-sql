@@ -175,11 +175,11 @@ else:
         help="Enter the customer ID manually (must match a YAML filename).",
     )
 
-# Shipment reference (optional but recommended for grouping multiple docs)
+# Shipment reference (required -- used for grouping multiple docs in a batch)
 shipment_ref = st.text_input(
     "Shipment Reference",
     value="",
-    help="Shipment reference number. When uploading multiple documents for the same shipment, use the same reference to group them.",
+    help="Required. Shipment reference number used to group and track documents for the same shipment.",
 )
 
 # File uploader — accepts multiple files for the same shipment
@@ -201,6 +201,12 @@ verify_button = st.button(
 # ── Handle Verification ─────────────────────────────────────────────
 # Process each uploaded file independently against the same customer rules.
 # Results are collected and shown together.
+
+# Validate shipment_ref is provided before proceeding
+if verify_button and not shipment_ref.strip():
+    st.warning("Shipment Reference is required. Please enter a shipment reference before verifying.")
+    verify_button = False  # Block the verification
+
 if verify_button and len(uploaded_files) > 0:
     # Reset previous state
     st.session_state.verification_result = None
@@ -271,9 +277,11 @@ if batch and len(batch) > 1:
         status = r.get("overall_status", "unknown")
         badge = get_status_badge(status)
         label = get_status_label(status)
-        n_fields = len(r.get("fields", []))
-        mismatches = sum(1 for f in r.get("fields", []) if f.get("status") == "mismatch")
-        uncertain = sum(1 for f in r.get("fields", []) if f.get("status") == "uncertain")
+        # The process endpoint returns "comparisons", detail endpoint returns "fields"
+        fields_list = r.get("comparisons", r.get("fields", []))
+        n_fields = len(fields_list)
+        mismatches = sum(1 for f in fields_list if f.get("status") == "mismatch")
+        uncertain = sum(1 for f in fields_list if f.get("status") == "uncertain")
         summary_data.append({
             "Document": r.get("_file_name", "unknown"),
             "Status": f"{badge} {label}",
@@ -283,6 +291,86 @@ if batch and len(batch) > 1:
         })
 
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+
+    # ── Unified Field View ──────────────────────────────────────────
+    # Merge all fields from all documents into one table so the CG can
+    # see all extracted fields side by side, grouped by field name.
+    st.subheader("Unified Field View")
+    st.caption(
+        "All fields from all documents merged into a single table. "
+        "Same fields from different documents are shown adjacent for comparison."
+    )
+
+    unified_data = []
+    for result in batch:
+        doc_name = result.get("_file_name", "unknown")
+        comparisons = result.get("comparisons", [])
+        for field in comparisons:
+            unified_data.append({
+                "Field": field.get("field_name", "").replace("_", " ").title(),
+                "Value": field.get("extracted_value", ""),
+                "Source": doc_name,
+                "Status": f"{get_status_badge(field.get('status', 'no_rule'))} {get_status_label(field.get('status', 'no_rule'))}",
+                "Confidence": f"{field.get('confidence', 0) * 100:.0f}%",
+                "Expected": field.get("expected_value") or "\u2014",
+            })
+
+    if unified_data:
+        # Sort by field name so same fields from different docs are adjacent
+        unified_df = pd.DataFrame(unified_data).sort_values("Field")
+        st.dataframe(unified_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No field comparison data available.")
+
+    # ── Cross-Document Consistency Warnings ─────────────────────────
+    # Group fields by name and check if all values match across documents.
+    # Uses normalized values to avoid false positives from formatting.
+    field_groups = {}
+    for result in batch:
+        doc_name = result.get("_file_name", "unknown")
+        for field in result.get("comparisons", []):
+            fname = field.get("field_name", "")
+            if fname not in field_groups:
+                field_groups[fname] = {}
+            # Prefer normalized value for consistency check; fall back to raw
+            norm_val = field.get("extracted_normalized") or field.get("extracted_value") or ""
+            field_groups[fname][doc_name] = {
+                "raw": field.get("extracted_value", ""),
+                "normalized": norm_val,
+            }
+
+    # Check for inconsistencies (same field, different normalized values)
+    inconsistent_fields = []
+    for fname, doc_vals in field_groups.items():
+        if len(doc_vals) < 2:
+            continue
+        unique_normalized = set(
+            v["normalized"].strip().lower()
+            for v in doc_vals.values()
+            if v["normalized"].strip()
+        )
+        if len(unique_normalized) > 1:
+            inconsistent_fields.append((fname, doc_vals))
+
+    if inconsistent_fields:
+        st.subheader("Cross-Document Inconsistencies")
+        st.warning(
+            f"Found {len(inconsistent_fields)} field(s) with different values "
+            f"across documents. These may indicate data entry errors."
+        )
+        for fname, doc_vals in inconsistent_fields:
+            field_display = fname.replace("_", " ").title()
+            with st.expander(f"Inconsistent: {field_display}", expanded=True):
+                inc_data = []
+                for doc_name, vals in doc_vals.items():
+                    inc_data.append({
+                        "Document": doc_name,
+                        "Raw Value": vals["raw"],
+                        "Normalized": vals["normalized"],
+                    })
+                st.dataframe(pd.DataFrame(inc_data), use_container_width=True, hide_index=True)
+
+    st.divider()
 
     # Let CG click to view details of a specific document
     doc_options = [r.get("_file_name", f"Doc {i+1}") for i, r in enumerate(batch)]
@@ -336,6 +424,13 @@ if st.session_state.verification_result is not None:
 
         with col4:
             st.metric("Verification ID", result.get("verification_id", "")[:8] + "...")
+
+        # ── Document Type Verification Warning ──────────────────────
+        # If the classified document type does not match the filename
+        # hint, show a warning. This is informational, not blocking.
+        doc_type_check = result.get("doc_type_check")
+        if doc_type_check and doc_type_check.get("warning"):
+            st.warning(f"Document Type Warning: {doc_type_check['warning']}")
 
         st.divider()
 

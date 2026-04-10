@@ -44,6 +44,7 @@ Public functions:
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -59,7 +60,8 @@ class FieldComparison:
 
     Attributes:
         field_name: The name of the field being compared (e.g., "consignee_name").
-        extracted_value: The value extracted from the document by the vision LLM.
+        extracted_value: The value extracted from the document by the vision LLM (raw).
+        extracted_normalized: The cleaned/normalized value used for comparison.
         expected_value: The expected value from the customer rule (for display).
         status: Comparison result — one of: match, mismatch, uncertain, no_rule.
         confidence: The extraction confidence score for this field (0.0-1.0).
@@ -69,8 +71,9 @@ class FieldComparison:
             None if the field matches or has no rule.
     """
     field_name: str
-    extracted_value: str | None
-    expected_value: str | None
+    extracted_value: str | None      # raw, as extracted by LLM
+    extracted_normalized: str | None  # cleaned for comparison
+    expected_value: str | None       # from customer rules
     status: str  # match | mismatch | uncertain | no_rule
     confidence: float
     rule_type: str | None
@@ -216,6 +219,166 @@ _MATCH_REGISTRY = {
 }
 
 
+# ── Value Normalization ────────────────────────────────────────────────
+# Cleans extracted values before comparison so that surface-level formatting
+# differences (currency symbols, thousand separators, unit suffixes) do not
+# cause false mismatches.
+
+# Common abbreviation pairs: map short form -> canonical long form.
+_ABBREVIATION_MAP = {
+    "corp": "corporation",
+    "ltd": "limited",
+    "inc": "incorporated",
+    "co": "company",
+    "intl": "international",
+    "int'l": "international",
+    "mfg": "manufacturing",
+    "dept": "department",
+}
+
+# Units pattern for removal (weight, volume, quantity units common in logistics)
+_UNITS_PATTERN = re.compile(
+    r'\s*(KG|CBM|MT|LBS|TEU|PCS|CTN|cartons|boxes|pallets|pieces)\s*$',
+    re.IGNORECASE,
+)
+
+
+def _normalize_value(value: str, field_name: str = "") -> str:
+    """Normalize extracted values for comparison.
+
+    Handles:
+    - Currency symbols: "$58,500.00" -> "58500.00"
+    - Thousand separators: "12,450" -> "12450"
+    - Units: "12,450 KG" -> "12450", "45.2 CBM" -> "45.2"
+    - Whitespace: "  Toyota  " -> "Toyota"
+    - Common abbreviations: "Corp" vs "Corporation", "Ltd" vs "Limited"
+
+    The raw (un-normalized) value is still stored in FieldComparison.extracted_value
+    so the CG sees the original; comparison logic uses the normalized form.
+
+    Args:
+        value: The raw extracted (or expected) value.
+        field_name: Optional field name for context-aware normalization.
+
+    Returns:
+        A cleaned string suitable for comparison.
+    """
+    if value is None:
+        return ""
+
+    s = str(value).strip()
+
+    # Remove currency symbols
+    for sym in ["$", "\u20ac", "\u00a3", "\u00a5", "USD", "EUR", "GBP", "JPY"]:
+        s = s.replace(sym, "").strip()
+
+    # Remove unit suffixes (KG, CBM, MT, etc.) -- keep only the number part
+    s = _UNITS_PATTERN.sub('', s).strip()
+
+    # Remove thousand separators but keep decimal point.
+    # Only apply when the string looks numeric with commas: "58,500.00" -> "58500.00"
+    if re.match(r'^[\d,]+\.?\d*$', s):
+        s = s.replace(',', '')
+
+    # Expand common abbreviations for text fields (not numeric)
+    # Only do this if the value is not purely numeric
+    if not re.match(r'^[\d.]+$', s):
+        words = s.split()
+        normalized_words = []
+        for w in words:
+            w_lower = w.lower().rstrip(".,;")
+            if w_lower in _ABBREVIATION_MAP:
+                # Preserve original casing style (Title case if original was)
+                replacement = _ABBREVIATION_MAP[w_lower]
+                if w[0].isupper():
+                    replacement = replacement.title()
+                normalized_words.append(replacement)
+            else:
+                normalized_words.append(w)
+        s = " ".join(normalized_words)
+
+    return s
+
+
+# ── Cross-Document Consistency Check ───────────────────────────────────
+
+def check_cross_document_consistency(
+    all_document_fields: list[dict],
+) -> list[dict]:
+    """Check if the same field extracted from different documents has consistent values.
+
+    When a shipment includes multiple documents (BOL, packing list, invoice),
+    shared fields like gross_weight or consignee_name should agree. This
+    function flags cases where the normalized value differs across documents.
+
+    This is a BONUS check on top of the per-document customer rule comparison.
+    It does not replace rule-based verification -- it catches inter-document
+    contradictions.
+
+    Args:
+        all_document_fields: List of dicts, each with:
+            - "document_type" (str): e.g. "bill_of_lading", "packing_list"
+            - "fields" (dict): field_name -> raw extracted value
+            - "confidence_scores" (dict): field_name -> float
+
+    Returns:
+        List of inconsistency dicts:
+        [
+            {
+                "field_name": "gross_weight",
+                "values": {"bill_of_lading": "12,450 KG", "packing_list": "13,000 KG"},
+                "normalized_values": {"bill_of_lading": "12450", "packing_list": "13000"},
+                "consistent": False,
+            },
+            ...
+        ]
+        Only fields appearing in 2+ documents are included. Fields that
+        appear in only one document are omitted.
+    """
+    if len(all_document_fields) < 2:
+        return []
+
+    # Collect {field_name -> {doc_type -> (raw_value, normalized_value)}}
+    field_map: dict[str, dict[str, tuple[str, str]]] = {}
+
+    for doc in all_document_fields:
+        doc_type = doc.get("document_type", "unknown")
+        fields = doc.get("fields", {})
+        for field_name, raw_value in fields.items():
+            raw_str = str(raw_value) if raw_value is not None else ""
+            norm_str = _normalize_value(raw_str, field_name)
+            if field_name not in field_map:
+                field_map[field_name] = {}
+            field_map[field_name][doc_type] = (raw_str, norm_str)
+
+    # Check consistency for fields that appear in multiple documents
+    inconsistencies = []
+    for field_name, doc_values in field_map.items():
+        if len(doc_values) < 2:
+            continue  # Only in one document -- nothing to compare
+
+        raw_vals = {dt: vals[0] for dt, vals in doc_values.items()}
+        norm_vals = {dt: vals[1] for dt, vals in doc_values.items()}
+        unique_normalized = set(v.lower() for v in norm_vals.values() if v)
+
+        consistent = len(unique_normalized) <= 1
+
+        inconsistencies.append({
+            "field_name": field_name,
+            "values": raw_vals,
+            "normalized_values": norm_vals,
+            "consistent": consistent,
+        })
+
+    logger.info(
+        "Cross-document consistency: %d shared fields, %d inconsistent",
+        len(inconsistencies),
+        sum(1 for i in inconsistencies if not i["consistent"]),
+    )
+
+    return inconsistencies
+
+
 # ── Public API ──────────────────────────────────────────────────────────
 
 def compare_fields(
@@ -265,6 +428,10 @@ def compare_fields(
         # Convert extracted value to string for comparison (handle None, lists, etc.)
         extracted_str = str(extracted_value) if extracted_value is not None else ""
 
+        # Normalize the extracted value for comparison (strip currency, units, etc.)
+        # The raw value is preserved in extracted_value for CG display.
+        extracted_normalized = _normalize_value(extracted_str, field_name)
+
         # Check if there is a customer rule for this field
         rule = customer_rules.get(field_name)
 
@@ -273,6 +440,7 @@ def compare_fields(
             comparisons.append(FieldComparison(
                 field_name=field_name,
                 extracted_value=extracted_str if extracted_str else None,
+                extracted_normalized=extracted_normalized if extracted_normalized else None,
                 expected_value=None,
                 status="no_rule",
                 confidence=confidence,
@@ -291,6 +459,7 @@ def compare_fields(
             comparisons.append(FieldComparison(
                 field_name=field_name,
                 extracted_value=extracted_str if extracted_str else None,
+                extracted_normalized=extracted_normalized if extracted_normalized else None,
                 expected_value=expected_display,
                 status="uncertain",
                 confidence=confidence,
@@ -316,6 +485,7 @@ def compare_fields(
             comparisons.append(FieldComparison(
                 field_name=field_name,
                 extracted_value=extracted_str if extracted_str else None,
+                extracted_normalized=extracted_normalized if extracted_normalized else None,
                 expected_value=None,
                 status="no_rule",
                 confidence=confidence,
@@ -324,9 +494,13 @@ def compare_fields(
             ))
             continue
 
-        # Execute the match function
+        # Execute the match function using normalized value for comparison.
+        # The match functions do their own internal normalization for tolerance
+        # checks; for exact/prefix/one_of/contains_any, we pass the normalized
+        # value so formatting differences don't cause false mismatches.
+        compare_value = extracted_normalized if extracted_normalized else extracted_str
         try:
-            is_match, expected_display, violation = match_func(extracted_str, rule)
+            is_match, expected_display, violation = match_func(compare_value, rule)
         except Exception as e:
             # Match function raised an unexpected error — mark as uncertain
             logger.error(
@@ -336,6 +510,7 @@ def compare_fields(
             comparisons.append(FieldComparison(
                 field_name=field_name,
                 extracted_value=extracted_str if extracted_str else None,
+                extracted_normalized=extracted_normalized if extracted_normalized else None,
                 expected_value=None,
                 status="uncertain",
                 confidence=confidence,
@@ -350,6 +525,7 @@ def compare_fields(
         comparisons.append(FieldComparison(
             field_name=field_name,
             extracted_value=extracted_str if extracted_str else None,
+            extracted_normalized=extracted_normalized if extracted_normalized else None,
             expected_value=expected_display,
             status=status,
             confidence=confidence,

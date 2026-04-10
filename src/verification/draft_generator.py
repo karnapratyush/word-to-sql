@@ -39,6 +39,8 @@ def generate_draft(
     overall_status: str,
     customer_name: str = "Customer",
     shipment_ref: Optional[str] = None,
+    document_summaries: Optional[list[dict]] = None,
+    cross_document_inconsistencies: Optional[list[dict]] = None,
 ) -> str:
     """Generate a draft email based on the verification result.
 
@@ -47,25 +49,45 @@ def generate_draft(
     generates a confirmation email. For uncertain status, generates
     an email noting that manual review is needed.
 
+    Supports multi-document batches: when document_summaries is provided,
+    the draft lists all documents processed and groups discrepancies by
+    document. Cross-document inconsistencies (if any) are mentioned as
+    an additional concern.
+
     Uses the LLM to generate professional emails. If the LLM fails
     (all models down), falls back to a simple template-based email.
 
     Args:
         comparisons: List of FieldComparison results from the comparator.
+            For single-document flow, these are the comparisons for that doc.
+            For multi-document flow, these are all comparisons combined.
         overall_status: One of "amendment_required", "uncertain", "approved".
         customer_name: The customer's display name for the email greeting.
         shipment_ref: Optional shipment reference number for the email subject.
+        document_summaries: Optional list of dicts for multi-document batches.
+            Each dict has keys: "file_name", "document_type", "status",
+            "comparisons" (list of FieldComparison for that document).
+        cross_document_inconsistencies: Optional list of inconsistency dicts
+            from check_cross_document_consistency(). Only included if there
+            are actual inconsistencies.
 
     Returns:
         A draft email string ready for human review and editing.
     """
     logger.info(
-        "Generating draft email: status=%s, customer=%s, shipment=%s",
+        "Generating draft email: status=%s, customer=%s, shipment=%s, docs=%d",
         overall_status, customer_name, shipment_ref,
+        len(document_summaries) if document_summaries else 1,
     )
 
-    # Build the discrepancy summary for the prompt
-    discrepancy_summary = _build_discrepancy_summary(comparisons)
+    # Build the discrepancy summary for the prompt.
+    # For multi-document batches, group discrepancies by document.
+    if document_summaries and len(document_summaries) > 1:
+        discrepancy_summary = _build_multi_doc_discrepancy_summary(
+            document_summaries, cross_document_inconsistencies,
+        )
+    else:
+        discrepancy_summary = _build_discrepancy_summary(comparisons)
 
     # Try LLM-based generation first
     try:
@@ -126,13 +148,22 @@ def _generate_with_llm(
     prompts = load_prompts()
     verification_prompts = prompts.get("verification", {})
 
-    # Select the appropriate prompt template based on overall status
-    if overall_status == "amendment_required":
-        prompt_template = verification_prompts.get("draft_amendment", "")
+    # Select the appropriate prompt template based on overall status.
+    # For multi-document batches (detected by the "DOCUMENTS PROCESSED" header
+    # in the discrepancy summary), prefer the batch-specific template.
+    is_batch = "DOCUMENTS PROCESSED:" in discrepancy_summary
+    if overall_status == "amendment_required" or overall_status == "uncertain":
+        if is_batch:
+            # Use batch template if available, fall back to single-doc template
+            prompt_template = verification_prompts.get(
+                "draft_amendment_batch",
+                verification_prompts.get("draft_amendment", ""),
+            )
+        else:
+            prompt_template = verification_prompts.get("draft_amendment", "")
     elif overall_status == "approved":
         prompt_template = verification_prompts.get("draft_approval", "")
     else:
-        # uncertain status — use amendment template with a note about uncertainty
         prompt_template = verification_prompts.get("draft_amendment", "")
 
     if not prompt_template:
@@ -287,3 +318,83 @@ def _build_discrepancy_summary(comparisons: list[FieldComparison]) -> str:
         lines.append(line)
 
     return "\n\n".join(lines)
+
+
+def _build_multi_doc_discrepancy_summary(
+    document_summaries: list[dict],
+    cross_document_inconsistencies: Optional[list[dict]] = None,
+) -> str:
+    """Build a formatted discrepancy summary for a multi-document batch.
+
+    Groups discrepancies by document and appends cross-document
+    inconsistencies (if any) as a separate section.
+
+    Args:
+        document_summaries: List of dicts with keys:
+            "file_name", "document_type", "status", "comparisons".
+        cross_document_inconsistencies: Optional list of inconsistency dicts
+            (only those where consistent=False).
+
+    Returns:
+        A formatted multi-line string listing all discrepancies grouped
+        by document, plus any cross-document inconsistencies.
+    """
+    sections = []
+
+    # Section 1: Documents processed
+    doc_list_lines = ["DOCUMENTS PROCESSED:"]
+    for i, doc in enumerate(document_summaries, start=1):
+        doc_type = (doc.get("document_type") or "unknown").replace("_", " ").title()
+        status_label = doc.get("status", "unknown").replace("_", " ").title()
+        doc_list_lines.append(
+            f"  {i}. {doc.get('file_name', 'unknown')} ({doc_type}) — {status_label}"
+        )
+    sections.append("\n".join(doc_list_lines))
+
+    # Section 2: Per-document discrepancies
+    for doc in document_summaries:
+        comparisons = doc.get("comparisons", [])
+        issues = [c for c in comparisons if c.status in ("mismatch", "uncertain")]
+        if not issues:
+            continue
+
+        file_name = doc.get("file_name", "unknown")
+        doc_type = (doc.get("document_type") or "unknown").replace("_", " ").title()
+        doc_section_lines = [f"DISCREPANCIES IN: {file_name} ({doc_type})"]
+
+        for j, comp in enumerate(issues, start=1):
+            field_display = comp.field_name.replace("_", " ").title()
+            status_label = "MISMATCH" if comp.status == "mismatch" else "UNCERTAIN"
+            doc_section_lines.append(
+                f"  {j}. {field_display} [{status_label}]\n"
+                f"     Extracted: {comp.extracted_value or '(empty)'}\n"
+                f"     Expected:  {comp.expected_value or '(no rule)'}\n"
+                f"     Confidence: {comp.confidence:.0%}"
+            )
+            if comp.rule_violated:
+                doc_section_lines[-1] += f"\n     Issue: {comp.rule_violated}"
+
+        sections.append("\n".join(doc_section_lines))
+
+    # Section 3: Cross-document inconsistencies (if any)
+    if cross_document_inconsistencies:
+        actual_inconsistencies = [
+            i for i in cross_document_inconsistencies if not i.get("consistent", True)
+        ]
+        if actual_inconsistencies:
+            inc_lines = [
+                "CROSS-DOCUMENT INCONSISTENCIES:",
+                "(The same field has different values in different documents)",
+            ]
+            for inc in actual_inconsistencies:
+                field_display = inc["field_name"].replace("_", " ").title()
+                inc_lines.append(f"  - {field_display}:")
+                for doc_type, value in inc.get("values", {}).items():
+                    inc_lines.append(f"      {doc_type}: {value}")
+            sections.append("\n".join(inc_lines))
+
+    if len(sections) <= 1:
+        # Only the document list, no discrepancies
+        return sections[0] + "\n\nNo discrepancies found across any documents."
+
+    return "\n\n".join(sections)

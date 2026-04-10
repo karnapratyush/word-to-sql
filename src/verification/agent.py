@@ -52,6 +52,7 @@ from src.common.exceptions import ExtractionError, UnsupportedFileError
 from src.common.schemas import ExtractionRequest
 from src.verification.comparator import (
     FieldComparison,
+    check_cross_document_consistency,
     compare_fields,
     determine_overall_status,
 )
@@ -160,6 +161,10 @@ def run_verification(
             len(extracted_fields), extraction_result.overall_confidence,
         )
 
+        # Verify the classified document type against filename hints.
+        # This is a soft check -- warnings are added to notes, not blocking.
+        doc_type_check = _verify_document_type(file_name, document_type)
+
     except (ExtractionError, UnsupportedFileError) as e:
         # Failure scenario 1: Extraction failed
         logger.error("Extraction failed for '%s': %s", file_name, e)
@@ -215,7 +220,11 @@ def run_verification(
     )
 
     # ── Step 6: Store results in the database ───────────────────────
+    # Collect any warnings (e.g., document type mismatch from filename check)
     notes = ""
+    if doc_type_check.get("warning"):
+        notes = doc_type_check["warning"]
+
     try:
         from src.repositories.verification_repo import VerificationRepository
 
@@ -269,6 +278,7 @@ def run_verification(
         "comparisons": [_comparison_to_dict(c) for c in comparisons],
         "draft_reply": draft_reply,
         "notes": notes,
+        "doc_type_check": doc_type_check,
         "error": None,
     }
 
@@ -416,6 +426,7 @@ def run_verification_from_document(
         "comparisons": [_comparison_to_dict(c) for c in comparisons],
         "draft_reply": draft_reply,
         "notes": notes,
+        "doc_type_check": None,  # Not available for re-verification (no filename)
         "error": None,
     }
 
@@ -429,16 +440,91 @@ def _comparison_to_dict(comp: FieldComparison) -> dict:
         comp: A FieldComparison instance from the comparator.
 
     Returns:
-        Dict with all FieldComparison attributes.
+        Dict with all FieldComparison attributes, including normalized value.
     """
     return {
         "field_name": comp.field_name,
         "extracted_value": comp.extracted_value,
+        "extracted_normalized": comp.extracted_normalized,
         "expected_value": comp.expected_value,
         "status": comp.status,
         "confidence": comp.confidence,
         "rule_type": comp.rule_type,
         "rule_violated": comp.rule_violated,
+    }
+
+
+def _verify_document_type(file_name: str, classified_type: str) -> dict:
+    """Check if the classified document type matches what was expected from the filename.
+
+    Simple heuristic: filenames often contain hints about the document type
+    (e.g., "ACME_BOL_2025.pdf" is likely a bill of lading). If the vision
+    pipeline classifies it differently, we add a warning but do NOT block
+    the verification -- the LLM classification may be more accurate.
+
+    Args:
+        file_name: Original uploaded filename (e.g., "invoice_toyota_jan.pdf").
+        classified_type: The document type classified by the vision pipeline
+            (e.g., "bill_of_lading", "invoice", "packing_list").
+
+    Returns:
+        Dict with keys:
+            expected: The type guessed from the filename (or None if no hint).
+            classified: The type from the vision pipeline.
+            match: Whether they agree (True/False/None if no hint).
+            warning: A warning string if they disagree, else None.
+    """
+    name_lower = file_name.lower()
+    classified_lower = (classified_type or "").lower()
+
+    # Mapping of filename keywords to expected document types
+    keyword_map = {
+        "bol": "bill_of_lading",
+        "b/l": "bill_of_lading",
+        "bl_": "bill_of_lading",
+        "bill_of_lading": "bill_of_lading",
+        "inv": "invoice",
+        "invoice": "invoice",
+        "pack": "packing_list",
+        "packing": "packing_list",
+        "customs": "customs_declaration",
+        "declaration": "customs_declaration",
+    }
+
+    expected_type = None
+    for keyword, doc_type in keyword_map.items():
+        if keyword in name_lower:
+            expected_type = doc_type
+            break
+
+    if expected_type is None:
+        # No hint in the filename -- cannot verify, no warning
+        return {
+            "expected": None,
+            "classified": classified_type,
+            "match": None,
+            "warning": None,
+        }
+
+    is_match = expected_type == classified_lower
+
+    warning = None
+    if not is_match:
+        warning = (
+            f"Filename suggests '{expected_type}' but the document was classified "
+            f"as '{classified_type}'. The classification may be correct -- please "
+            f"verify the document type is accurate."
+        )
+        logger.warning(
+            "Document type mismatch: filename '%s' suggests '%s', classified as '%s'",
+            file_name, expected_type, classified_type,
+        )
+
+    return {
+        "expected": expected_type,
+        "classified": classified_type,
+        "match": is_match,
+        "warning": warning,
     }
 
 
@@ -482,5 +568,6 @@ def _error_outcome(
         "comparisons": [],
         "draft_reply": "",
         "notes": "",
+        "doc_type_check": None,
         "error": error,
     }

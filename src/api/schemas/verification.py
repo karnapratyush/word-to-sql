@@ -26,7 +26,8 @@ class FieldComparisonResponse(BaseModel):
 
     Attributes:
         field_name: Name of the compared field (e.g., "consignee_name").
-        extracted_value: Value extracted from the document.
+        extracted_value: Raw value extracted from the document (as seen by CG).
+        extracted_normalized: Cleaned value used for comparison (currency/units stripped).
         expected_value: Expected value from the customer rule.
         status: Comparison result (match, mismatch, uncertain, no_rule).
         confidence: Extraction confidence score (0.0-1.0).
@@ -35,6 +36,7 @@ class FieldComparisonResponse(BaseModel):
     """
     field_name: str
     extracted_value: Optional[str] = None
+    extracted_normalized: Optional[str] = None
     expected_value: Optional[str] = None
     status: str  # match | mismatch | uncertain | no_rule
     confidence: float = 0.0
@@ -53,11 +55,17 @@ class VerificationProcessRequest(BaseModel):
 
     Attributes:
         customer_id: Customer identifier matching a YAML rules file.
-        shipment_ref: Optional shipment reference number.
+        shipment_ref: Shipment reference number. Strongly recommended --
+            required by the UI, used for grouping batch documents.
+            The API still accepts None for backward compatibility with
+            programmatic callers, but the UI enforces it.
         doc_type_hint: Optional document type hint for the vision pipeline.
     """
     customer_id: str
-    shipment_ref: Optional[str] = None
+    shipment_ref: Optional[str] = Field(
+        default=None,
+        description="Shipment reference number. Required by the UI for batch grouping.",
+    )
     doc_type_hint: Optional[str] = None
 
 
@@ -97,6 +105,7 @@ class VerificationProcessResponse(BaseModel):
     comparisons: list[FieldComparisonResponse] = []
     draft_reply: str = ""
     notes: str = ""
+    doc_type_check: Optional[dict] = None
     error: Optional[str] = None
 
 

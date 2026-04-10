@@ -130,6 +130,7 @@ async def process_document(
             comparisons=comparisons,
             draft_reply=result.get("draft_reply", ""),
             notes=result.get("notes", ""),
+            doc_type_check=result.get("doc_type_check"),
             error=result.get("error"),
         )
 
